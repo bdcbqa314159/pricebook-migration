@@ -1,0 +1,253 @@
+"""Fixings manager: store and retrieve daily rate fixings.
+
+File-based storage for SOFR, EURIBOR, CPI, and other daily fixings.
+Used for retroactive floating leg valuation and historical analysis.
+
+    from pricebook.core.fixings import FixingsStore
+
+    store = FixingsStore()
+    store.set("SOFR", date(2024, 1, 15), 0.043)
+    rate = store.get("SOFR", date(2024, 1, 15))
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import math
+import os
+from datetime import date, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pricebook.core.calendar import Calendar
+
+
+def _as_value(v: float) -> float:
+    """Coerce to a finite float; reject NaN/Inf.
+
+    Consumers treat ``get(...) is not None`` as "usable rate", so a stored NaN
+    would pass that check and silently poison a PV (and every greek off it)
+    instead of triggering the curve fallback. NaN/Inf are also not valid JSON.
+    """
+    f = float(v)
+    if not math.isfinite(f):
+        raise ValueError(f"non-finite fixing value: {v!r}")
+    return f
+
+
+def _as_date(d: date) -> date:
+    """Normalise a key to a calendar day.
+
+    ``datetime`` is a subclass of ``date``, so it slips past the ``date`` type
+    hint — but a datetime key lands in a *distinct* slot from the same day's
+    date (silent miss) and, once mixed in, poisons every ``sorted()`` over the
+    rate (``can't compare datetime to date``). Fixings are per-day, so collapse.
+    """
+    return d.date() if isinstance(d, datetime) else d
+
+
+class FixingsStore:
+    """File-backed store for daily rate fixings.
+
+    Args:
+        path: directory for storage files. If None, in-memory only.
+    """
+
+    def __init__(self, path: str | None = None):
+        self._path = path
+        self._data: dict[str, dict[date, float]] = {}
+        if path and os.path.isdir(path):
+            self._load_all()
+
+    def set(self, rate_name: str, d: date, value: float) -> None:
+        """Store a fixing."""
+        if rate_name not in self._data:
+            self._data[rate_name] = {}
+        self._data[rate_name][_as_date(d)] = _as_value(value)
+
+    def get(self, rate_name: str, d: date) -> float | None:
+        """Retrieve a fixing. Returns None if not found."""
+        return self._data.get(rate_name, {}).get(_as_date(d))
+
+    def get_or_raise(self, rate_name: str, d: date) -> float:
+        """Retrieve a fixing, raising KeyError if not found."""
+        val = self.get(rate_name, d)
+        if val is None:
+            raise KeyError(f"No fixing for {rate_name} on {d}")
+        return val
+
+    def has(self, rate_name: str, d: date) -> bool:
+        return self.get(rate_name, d) is not None
+
+    def get_with_lag(
+        self,
+        rate_name: str,
+        d: date,
+        lag: int,
+        calendar: "Calendar | None" = None,
+    ) -> float | None:
+        """Retrieve a fixing with a business-day lag.
+
+        Args:
+            rate_name: index name (e.g. "SOFR")
+            d: reference date (e.g. accrual start)
+            lag: number of days to go back (e.g. 2 for T-2). Interpreted as
+                *business* days when a `calendar` is given, else *calendar* days.
+            calendar: business day calendar. If None, `lag` is calendar days
+                (a convenience — real fixing lags are business days, so pass a
+                calendar for correct T-N).
+
+        Returns the fixing at the date `lag` days before `d` (business or
+        calendar per `calendar` above), or None if not found.
+        """
+        if calendar is not None:
+            fixing_date = calendar.add_business_days(d, -lag)
+        else:
+            from datetime import timedelta
+
+            fixing_date = d - timedelta(days=lag)
+        return self.get(rate_name, fixing_date)
+
+    def rate_names(self) -> list[str]:
+        return sorted(self._data.keys())
+
+    def dates_for(self, rate_name: str) -> list[date]:
+        """All dates with fixings for a rate, sorted."""
+        return sorted(self._data.get(rate_name, {}).keys())
+
+    def series(
+        self, rate_name: str, start: date | None = None, end: date | None = None
+    ) -> list[tuple[date, float]]:
+        """Get a time series of fixings."""
+        data = self._data.get(rate_name, {})
+        result = sorted(data.items())
+        if start is not None:
+            start = _as_date(start)
+            result = [(d, v) for d, v in result if d >= start]
+        if end is not None:
+            end = _as_date(end)
+            result = [(d, v) for d, v in result if d <= end]
+        return result
+
+    def bulk_set(self, rate_name: str, fixings: list[tuple[date, float]]) -> None:
+        """Store multiple fixings at once."""
+        if rate_name not in self._data:
+            self._data[rate_name] = {}
+        for d, v in fixings:
+            self._data[rate_name][_as_date(d)] = _as_value(v)
+
+    # ---- Persistence ----
+
+    def save(self, path: str | None = None) -> None:
+        """Save all fixings to disk as JSON."""
+        p = path or self._path
+        if p is None:
+            raise ValueError("No path specified for saving")
+        os.makedirs(p, exist_ok=True)
+        for rate_name, data in self._data.items():
+            # rate_name becomes a filename — reject path separators / traversal.
+            if not rate_name or "/" in rate_name or "\\" in rate_name or ".." in rate_name:
+                raise ValueError(f"Unsafe rate name for a filename: {rate_name!r}")
+            filepath = os.path.join(p, f"{rate_name}.json")
+            serialised = {d.isoformat(): v for d, v in sorted(data.items())}
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(serialised, f, indent=2)
+
+    def _load_all(self) -> None:
+        """Load all JSON files from the storage directory."""
+        if self._path is None:
+            return
+        for filename in os.listdir(self._path):
+            if filename.endswith(".json"):
+                rate_name = filename[:-5]
+                filepath = os.path.join(self._path, filename)
+                try:
+                    with open(filepath, encoding="utf-8") as f:
+                        raw = json.load(f)
+                    self._data[rate_name] = {
+                        date.fromisoformat(k): _as_value(v) for k, v in raw.items()
+                    }
+                except (ValueError, AttributeError) as e:
+                    # Fail loud but name the file — a bare JSONDecodeError /
+                    # "Invalid isoformat string" gave no clue which file was bad.
+                    raise ValueError(f"Failed to load fixings from {filename!r}: {e}") from e
+
+    def load_csv(
+        self,
+        rate_name: str,
+        filepath: str,
+        date_col: str = "date",
+        value_col: str = "value",
+        skip_invalid: bool = True,
+    ) -> int:
+        """Load fixings from a CSV file.
+
+        Args:
+            skip_invalid: if True, skip rows with missing/invalid data.
+                If False, raise on first error.
+
+        Returns:
+            Number of fixings loaded.
+        """
+        count = 0
+        # utf-8-sig transparently strips a leading BOM (Excel/data-provider
+        # exports) so the first column isn't named "﻿date"; newline=""
+        # is required for correct quoted-field parsing (csv docs).
+        with open(filepath, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            # Missing required columns is a file-level error, not a bad row —
+            # raise regardless of skip_invalid (else the whole file loads 0
+            # silently).
+            if (
+                reader.fieldnames is None
+                or date_col not in reader.fieldnames
+                or value_col not in reader.fieldnames
+            ):
+                raise ValueError(
+                    f"CSV {filepath!r} missing required columns "
+                    f"{date_col!r}/{value_col!r}; found {reader.fieldnames}"
+                )
+            for row_idx, row in enumerate(reader, start=2):  # row 1 is header
+                try:
+                    d = date.fromisoformat(row[date_col])
+                    v = float(row[value_col])
+                    self.set(rate_name, d, v)  # set() rejects NaN/Inf
+                    count += 1
+                except (ValueError, KeyError, TypeError) as e:
+                    if not skip_invalid:
+                        raise ValueError(f"row {row_idx}: {e}") from e
+        return count
+
+
+# ---- Sample fixings ----
+
+
+def create_sample_fixings(reference_date: date, history_days: int = 252) -> FixingsStore:
+    """Create a FixingsStore with sample data for testing.
+
+    Generates synthetic daily SOFR, ESTR, FED_FUNDS (weekdays) and monthly CPI.
+    """
+    import random
+    from datetime import timedelta
+
+    store = FixingsStore()
+    rng = random.Random(42)
+
+    rates = {"SOFR": 0.043, "ESTR": 0.035, "FED_FUNDS": 0.043}
+    for name, base in rates.items():
+        rate = base
+        for i in range(history_days):
+            d = reference_date - timedelta(days=history_days - i)
+            if d.weekday() < 5:
+                rate = max(rate + rng.gauss(0, 0.0005), 0.001)
+                store.set(name, d, round(rate, 6))
+
+    # CPI: monthly, increasing
+    cpi = 310.0
+    for m in range(24):
+        d = date(reference_date.year - 2 + m // 12, 1 + m % 12, 1)
+        cpi *= 1 + rng.uniform(0.001, 0.004)
+        store.set("CPI", d, round(cpi, 2))
+
+    return store

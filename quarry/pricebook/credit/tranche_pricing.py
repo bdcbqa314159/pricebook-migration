@@ -1,0 +1,661 @@
+"""Tranche CDS pricing with base correlation calibration.
+
+Standard tranches on credit indices (iTraxx, CDX). Uses Gaussian copula
+for expected tranche loss calculation and base correlation calibration.
+
+    from pricebook.credit.tranche_pricing import TrancheCDS, calibrate_base_correlation
+
+    tranche = TrancheCDS(attachment=0.0, detachment=0.03, maturity=date(2031,3,20))
+    result = tranche.price(discount_curve, survival_curves, correlation=0.3)
+
+    base_corr = calibrate_base_correlation(tranche_quotes, survival_curves, disc)
+
+References:
+    O'Kane, D. (2008). Modelling Single-name and Multi-name Credit
+    Derivatives. Wiley, Ch. 10-11 — Tranches and Base Correlation.
+    Li, D. (2000). On Default Correlation: A Copula Function Approach.
+    McGinty, Beinstein et al. (2004). Credit Correlation: A Guide. JPMorgan.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from datetime import date, timedelta
+from typing import Any
+
+import numpy as np
+from scipy.stats import norm
+
+from pricebook.core.day_count import DayCountConvention, year_fraction
+from pricebook.core.discount_curve import DiscountCurve
+from pricebook.core.survival_curve import SurvivalCurve
+from pricebook.core.solvers import brentq
+from pricebook.core.serialisable import _register, _serialise_atom
+
+
+# Standard index tranches
+STANDARD_TRANCHES = {
+    "equity": (0.00, 0.03),
+    "mezzanine_1": (0.03, 0.06),
+    "mezzanine_2": (0.06, 0.09),
+    "mezzanine_3": (0.09, 0.12),
+    "senior": (0.12, 0.22),
+    "super_senior": (0.22, 1.00),
+}
+
+
+@dataclass
+class TrancheResult:
+    """Tranche pricing result."""
+    price: float                  # PV of the tranche
+    expected_loss: float          # expected tranche loss at maturity
+    protection_pv: float
+    premium_pv: float
+    par_spread: float             # spread that makes PV = 0
+    attachment: float
+    detachment: float
+
+    def to_dict(self) -> dict:
+        return {
+            "price": self.price, "expected_loss": self.expected_loss,
+            "protection_pv": self.protection_pv, "premium_pv": self.premium_pv,
+            "par_spread": self.par_spread,
+            "attachment": self.attachment, "detachment": self.detachment,
+        }
+
+
+def expected_tranche_loss(
+    attachment: float,
+    detachment: float,
+    survival_curves: list[SurvivalCurve],
+    discount_curve: DiscountCurve,
+    rho: float,
+    T: float,
+    recovery: float = 0.4,
+    n_sims: int = 50_000,
+    seed: int = 42,
+    recovery_specs=None,
+) -> float:
+    """Expected tranche loss via Gaussian copula MC.
+
+    L_tranche = clip(L_portfolio - a, 0, d-a) / (d-a)
+
+    where L_portfolio = (n_defaults / N) × (1-R).
+
+    Args:
+        recovery_specs: optional list of RecoverySpec (one per name).
+            When provided, per-name stochastic recovery is sampled
+            correlated to the systematic factor M. Overrides flat recovery.
+    """
+    width = detachment - attachment
+    if width <= 0:
+        return 0.0
+    if not 0.0 <= rho <= 1.0:
+        raise ValueError(f"rho must be in [0, 1], got {rho}")
+
+    n_names = len(survival_curves)
+    ref = discount_curve.reference_date
+
+    rng = np.random.default_rng(seed)
+    sqrt_rho = math.sqrt(rho)
+    sqrt_1_rho = math.sqrt(1.0 - rho)
+
+    M = rng.standard_normal(n_sims)
+    eps = rng.standard_normal((n_sims, n_names))
+    Z = sqrt_rho * M[:, np.newaxis] + sqrt_1_rho * eps
+
+    T_date = ref + timedelta(days=int(T * 365))
+    thresholds = np.array([
+        norm.ppf(max(1.0 - sc.survival(T_date), 1e-15))
+        for sc in survival_curves
+    ])
+    defaults = Z < thresholds[np.newaxis, :]
+
+    if recovery_specs is not None:
+        # Per-name stochastic recovery correlated to systematic factor M
+        lgd_matrix = np.zeros((n_sims, n_names))
+        for j in range(n_names):
+            R_j = recovery_specs[j].sample(n_sims, systematic_factor=M, seed=seed + j + 1)
+            lgd_matrix[:, j] = 1 - R_j
+        portfolio_loss = (defaults * lgd_matrix).sum(axis=1) / n_names
+    else:
+        n_defaults = defaults.sum(axis=1).astype(float)
+        portfolio_loss = n_defaults / n_names * (1.0 - recovery)
+
+    tranche_loss = np.clip(portfolio_loss - attachment, 0.0, width) / width
+    return float(tranche_loss.mean())
+
+
+class TrancheCDS:
+    """CDS tranche — protection on a slice of index portfolio loss.
+
+    Buyer pays premium on surviving tranche notional.
+    Seller pays losses that hit the [attachment, detachment] band.
+
+    Args:
+        attachment: lower tranche bound (0.0 for equity).
+        detachment: upper tranche bound (0.03 for equity).
+        maturity: tranche maturity date.
+        spread: running premium (decimal).
+        notional: tranche notional.
+        recovery: assumed uniform recovery.
+        n_names: number of reference entities.
+    """
+
+    _SERIAL_TYPE = "tranche_cds"
+
+    def __init__(
+        self,
+        attachment: float,
+        detachment: float,
+        maturity: date,
+        spread: float = 0.05,
+        notional: float = 10_000_000.0,
+        recovery: float = 0.4,
+        n_names: int = 125,
+    ):
+        if detachment <= attachment:
+            raise ValueError(f"detachment ({detachment}) must be > attachment ({attachment})")
+        self.attachment = attachment
+        self.detachment = detachment
+        self.maturity = maturity
+        self.spread = spread
+        self.notional = notional
+        self.recovery = recovery
+        self.n_names = n_names
+
+    @property
+    def width(self) -> float:
+        return self.detachment - self.attachment
+
+    @property
+    def is_equity(self) -> bool:
+        return self.attachment == 0.0
+
+    def price(
+        self,
+        discount_curve: DiscountCurve,
+        survival_curves: list[SurvivalCurve],
+        correlation: float = 0.3,
+        n_sims: int = 50_000,
+        seed: int = 42,
+        recovery_specs=None,
+        frequency: int = 4,
+    ) -> TrancheResult:
+        """Price the tranche via Gaussian copula MC with multi-period legs.
+
+        Args:
+            recovery_specs: optional list of RecoverySpec (one per name).
+            frequency: payment frequency (4=quarterly, default).
+        """
+        ref = discount_curve.reference_date
+        T = year_fraction(ref, self.maturity, DayCountConvention.ACT_365_FIXED)
+        dt = 1.0 / frequency
+        n_periods = max(1, int(T * frequency))
+
+        # Compute EL at each payment date
+        els = [0.0]
+        for i in range(1, n_periods + 1):
+            t = min(i * dt, T)
+            el = expected_tranche_loss(
+                self.attachment, self.detachment, survival_curves,
+                discount_curve, correlation, t, self.recovery, n_sims, seed,
+                recovery_specs=recovery_specs,
+            )
+            els.append(el)
+
+        def _date_at(t_years):
+            return ref + timedelta(days=round(t_years * 365))
+
+        # Premium leg: Σ spread × (1-EL_i) × dt × df_i × tranche_notional.
+        # EL_i is normalised to [0, 1] (fraction of tranche notional lost),
+        # so the surviving tranche notional in period i is (1-EL_i)·notional.
+        premium_pv = 0.0
+        for i in range(1, n_periods + 1):
+            t = min(i * dt, T)
+            df = discount_curve.df(_date_at(t))
+            premium_pv += self.spread * (1 - els[i]) * dt * df
+        premium_pv *= self.notional
+
+        # Protection leg: Σ (EL_i − EL_{i-1}) × df_i × tranche_notional.
+        #
+        # Fix T4-TR1: pre-fix the protection PV had a spurious extra `× width`
+        # factor (and the par-spread numerator likewise).  Since EL is
+        # already normalised by `width` inside `expected_tranche_loss`
+        # (`tranche_loss = clip(L − a, 0, width) / width`), multiplying by
+        # `width` again gives the WRONG dimensional result.  Pre-fix par
+        # spreads were `width` × the correct value — i.e. 30× too small
+        # for the equity tranche (width=0.03), 10× too small for senior
+        # (width=0.10), etc.  Standard equity-tranche par spreads of
+        # 1500-2500 bp came out as 50-80 bp pre-fix.
+        protection_pv = 0.0
+        for i in range(1, n_periods + 1):
+            t = min(i * dt, T)
+            df = discount_curve.df(_date_at(t))
+            protection_pv += (els[i] - els[i - 1]) * df
+        protection_pv *= self.notional
+
+        pv = protection_pv - premium_pv
+
+        # Par spread: spread such that pv = 0.
+        risky_annuity = sum(
+            (1 - els[i]) * dt * discount_curve.df(_date_at(min(i * dt, T)))
+            for i in range(1, n_periods + 1)
+        )
+        if risky_annuity > 1e-10:
+            prot_ratio = sum(
+                (els[i] - els[i - 1]) * discount_curve.df(_date_at(min(i * dt, T)))
+                for i in range(1, n_periods + 1)
+            )
+            par_spread = prot_ratio / risky_annuity
+        else:
+            par_spread = 0.0
+
+        return TrancheResult(
+            price=pv, expected_loss=el,
+            protection_pv=protection_pv, premium_pv=premium_pv,
+            par_spread=par_spread,
+            attachment=self.attachment, detachment=self.detachment,
+        )
+
+    def pv_ctx(self, ctx) -> float:
+        if ctx.credit_curves:
+            scs = list(ctx.credit_curves.values())
+            while len(scs) < self.n_names:
+                scs.append(scs[-1])
+            scs = scs[:self.n_names]
+            return self.price(ctx.discount_curve, scs).price
+        return 0.0
+
+    # ---- Serialisation ----
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self._SERIAL_TYPE, "params": {
+            "attachment": self.attachment, "detachment": self.detachment,
+            "maturity": self.maturity.isoformat(), "spread": self.spread,
+            "notional": self.notional, "recovery": self.recovery,
+            "n_names": self.n_names,
+        }}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> TrancheCDS:
+        p = d["params"]
+        return cls(
+            attachment=p["attachment"], detachment=p["detachment"],
+            maturity=date.fromisoformat(p["maturity"]),
+            spread=p.get("spread", 0.05), notional=p.get("notional", 10_000_000.0),
+            recovery=p.get("recovery", 0.4), n_names=p.get("n_names", 125),
+        )
+
+
+_register(TrancheCDS)
+
+
+# ---- Base correlation calibration ----
+
+def calibrate_base_correlation(
+    tranche_quotes: dict[float, float],
+    survival_curves: list[SurvivalCurve],
+    discount_curve: DiscountCurve,
+    maturity: date | None = None,
+    recovery: float = 0.4,
+    n_sims: int = 50_000,
+    seed: int = 42,
+) -> dict[float, float]:
+    """Calibrate base correlation from tranche market quotes.
+
+    For each detachment point d, find the correlation ρ(d) such that
+    the [0, d] tranche reprices at the market quote.
+
+    Base correlation is monotonically increasing: equity tranche has
+    lower correlation than senior (correlation skew).
+
+    Args:
+        tranche_quotes: {detachment_point: market_expected_loss}.
+            E.g. {0.03: 0.45, 0.06: 0.12, 0.09: 0.05}
+        survival_curves: N constituent survival curves.
+        discount_curve: risk-free curve.
+        maturity: tranche maturity (default: 5Y from ref).
+
+    Returns:
+        {detachment_point: base_correlation} — monotonically increasing.
+    """
+    ref = discount_curve.reference_date
+    mat = maturity or (ref + timedelta(days=1825))
+    T = year_fraction(ref, mat, DayCountConvention.ACT_365_FIXED)
+    n_names = len(survival_curves)
+
+    base_corr = {}
+    for det_point in sorted(tranche_quotes.keys()):
+        target_el = tranche_quotes[det_point]
+
+        def objective(rho: float) -> float:
+            el = expected_tranche_loss(
+                0.0, det_point, survival_curves, discount_curve,
+                rho, T, recovery, n_sims, seed,
+            )
+            return el - target_el
+
+        try:
+            rho = brentq(objective, 0.001, 0.999)
+        except Exception:
+            rho = 0.5  # fallback
+
+        base_corr[det_point] = rho
+
+    return base_corr
+
+
+# ---------------------------------------------------------------------------
+# Base correlation surface with interpolation
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BaseCorrelationSurface:
+    """Calibrated base correlation surface with interpolation.
+
+    Stores calibrated (detachment, rho) pairs and provides smooth
+    interpolation for bespoke detachment points.
+
+    Base correlation is monotonically non-decreasing in detachment:
+    equity tranche has lower correlation than senior.
+    """
+    detachments: list[float]
+    base_correlations: list[float]
+
+    def __post_init__(self):
+        if len(self.detachments) != len(self.base_correlations):
+            raise ValueError("detachments and base_correlations must have same length")
+
+    def __call__(self, detachment: float) -> float:
+        """Interpolate base correlation at a given detachment point."""
+        return self.interpolate(detachment)
+
+    def interpolate(self, detachment: float, method: str = "cubic") -> float:
+        """Interpolate base correlation.
+
+        Args:
+            method: "linear" or "cubic" (cubic spline with monotonicity).
+        """
+        dets = np.array(self.detachments)
+        corrs = np.array(self.base_correlations)
+
+        if method == "linear":
+            return float(np.interp(detachment, dets, corrs))
+        elif method == "cubic":
+            if len(dets) < 3:
+                return float(np.interp(detachment, dets, corrs))
+            from scipy.interpolate import CubicSpline
+            cs = CubicSpline(dets, corrs, bc_type="clamped")
+            val = float(cs(detachment))
+            # Enforce monotonicity: clamp to range
+            return max(float(corrs[0]), min(float(corrs[-1]), val))
+        else:
+            raise ValueError(f"Unknown method '{method}'. Use 'linear' or 'cubic'.")
+
+    def check_arbitrage(self) -> dict:
+        """Check for arbitrage violations in the base correlation surface.
+
+        Violations:
+        1. Non-monotonicity: base_corr must be non-decreasing in detachment.
+        2. Out of bounds: correlations must be in (0, 1).
+        """
+        issues = []
+        for i in range(len(self.base_correlations)):
+            r = self.base_correlations[i]
+            if r <= 0 or r >= 1:
+                issues.append(f"Correlation {r:.4f} at det={self.detachments[i]:.2f} out of (0,1)")
+            if i > 0 and r < self.base_correlations[i - 1] - 1e-6:
+                issues.append(
+                    f"Non-monotonic: rho({self.detachments[i]:.2f})={r:.4f} < "
+                    f"rho({self.detachments[i-1]:.2f})={self.base_correlations[i-1]:.4f}")
+        return {"valid": len(issues) == 0, "issues": issues}
+
+    def bump(self, shift: float) -> "BaseCorrelationSurface":
+        """Return a new surface with all correlations bumped by shift."""
+        bumped = [max(0.001, min(0.999, r + shift)) for r in self.base_correlations]
+        return BaseCorrelationSurface(self.detachments[:], bumped)
+
+    def to_dict(self) -> dict:
+        return {"detachments": self.detachments,
+                "base_correlations": self.base_correlations}
+
+    @classmethod
+    def from_calibration(cls, base_corr: dict[float, float]) -> "BaseCorrelationSurface":
+        """Build from calibrate_base_correlation() output."""
+        dets = sorted(base_corr.keys())
+        corrs = [base_corr[d] for d in dets]
+        return cls(dets, corrs)
+
+
+# ---------------------------------------------------------------------------
+# Multi-period tranche pricing
+# ---------------------------------------------------------------------------
+
+def price_tranche_multiperiod(
+    attachment: float,
+    detachment: float,
+    survival_curves: list[SurvivalCurve],
+    discount_curve: DiscountCurve,
+    correlation: float,
+    spread: float,
+    maturity_years: float = 5.0,
+    recovery: float = 0.4,
+    frequency: int = 4,
+    n_sims: int = 50_000,
+    seed: int = 42,
+) -> TrancheResult:
+    """Multi-period tranche pricing with proper premium and protection legs.
+
+    Premium leg: Σ spread × (1 - EL_i) × yf_i × df_i × notional
+    Protection leg: Σ (EL_i - EL_{i-1}) × df_i × width × notional
+
+    Computes expected tranche loss at each payment date.
+    """
+    width = detachment - attachment
+    if width <= 0:
+        return TrancheResult(0, 0, 0, 0, 0, attachment, detachment)
+
+    ref = discount_curve.reference_date
+    dt = 1.0 / frequency
+    n_periods = int(maturity_years * frequency)
+
+    # Compute EL at each payment date
+    els = [0.0]  # EL at t=0
+    for i in range(1, n_periods + 1):
+        t = i * dt
+        el = expected_tranche_loss(
+            attachment, detachment, survival_curves,
+            discount_curve, correlation, t, recovery, n_sims, seed,
+        )
+        els.append(el)
+
+    def _date_at(t_years: float) -> date:
+        return ref + timedelta(days=round(t_years * 365))
+
+    # Premium leg
+    premium_pv = 0.0
+    for i in range(1, n_periods + 1):
+        t = i * dt
+        df = discount_curve.df(_date_at(t))
+        surviving = 1.0 - els[i]
+        premium_pv += spread * surviving * dt * df
+
+    # Protection leg
+    protection_pv = 0.0
+    for i in range(1, n_periods + 1):
+        t = i * dt
+        df = discount_curve.df(_date_at(t))
+        delta_el = els[i] - els[i - 1]
+        protection_pv += delta_el * width * df
+
+    pv = protection_pv - premium_pv
+
+    # Par spread
+    annuity = sum(
+        (1.0 - els[i]) * dt * discount_curve.df(_date_at(i * dt))
+        for i in range(1, n_periods + 1)
+    )
+    par_spread = protection_pv / annuity if annuity > 1e-10 else 0.0
+
+    return TrancheResult(
+        price=pv, expected_loss=els[-1],
+        protection_pv=protection_pv, premium_pv=premium_pv,
+        par_spread=par_spread,
+        attachment=attachment, detachment=detachment,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Student-t copula for tranche loss
+# ---------------------------------------------------------------------------
+
+def expected_tranche_loss_t(
+    attachment: float,
+    detachment: float,
+    survival_curves: list[SurvivalCurve],
+    discount_curve: DiscountCurve,
+    rho: float,
+    T: float,
+    nu: float = 5.0,
+    recovery: float = 0.4,
+    n_sims: int = 50_000,
+    seed: int = 42,
+    recovery_specs=None,
+) -> float:
+    """Expected tranche loss via Student-t copula MC.
+
+    Same structure as Gaussian copula but with t-distributed factors.
+    Captures tail dependence: more clustered defaults under stress.
+
+    As ν → ∞, converges to Gaussian copula.
+
+    Args:
+        nu: degrees of freedom (lower = fatter tails).
+        recovery_specs: optional list of RecoverySpec for stochastic recovery.
+    """
+    from scipy.stats import t as t_dist
+
+    width = detachment - attachment
+    if width <= 0:
+        return 0.0
+
+    n_names = len(survival_curves)
+    ref = discount_curve.reference_date
+
+    rng = np.random.default_rng(seed)
+    sqrt_rho = math.sqrt(max(rho, 0.0))
+    sqrt_1_rho = math.sqrt(max(1.0 - rho, 0.0))
+
+    chi2 = np.maximum(rng.chisquare(nu, n_sims), 0.01)
+    W = np.sqrt(nu / chi2)
+
+    M_normal = rng.standard_normal(n_sims)
+    M = M_normal * W
+    eps = rng.standard_normal((n_sims, n_names)) * W[:, np.newaxis]
+    Z = sqrt_rho * M[:, np.newaxis] + sqrt_1_rho * eps
+
+    T_date = ref + timedelta(days=int(T * 365))
+    thresholds = np.array([
+        t_dist.ppf(max(1.0 - sc.survival(T_date), 1e-15), nu)
+        for sc in survival_curves
+    ])
+    defaults = Z < thresholds[np.newaxis, :]
+
+    if recovery_specs is not None:
+        # Use the underlying normal M for recovery correlation
+        lgd_matrix = np.zeros((n_sims, n_names))
+        for j in range(n_names):
+            R_j = recovery_specs[j].sample(n_sims, systematic_factor=M_normal, seed=seed + j + 1)
+            lgd_matrix[:, j] = 1 - R_j
+        portfolio_loss = (defaults * lgd_matrix).sum(axis=1) / n_names
+    else:
+        n_defaults = defaults.sum(axis=1).astype(float)
+        portfolio_loss = n_defaults / n_names * (1.0 - recovery)
+
+    tranche_loss = np.clip(portfolio_loss - attachment, 0.0, width) / width
+    return float(tranche_loss.mean())
+
+
+# ---------------------------------------------------------------------------
+# Correlation sensitivity (rho01)
+# ---------------------------------------------------------------------------
+
+def tranche_rho01(
+    attachment: float,
+    detachment: float,
+    survival_curves: list[SurvivalCurve],
+    discount_curve: DiscountCurve,
+    correlation: float,
+    T: float,
+    recovery: float = 0.4,
+    shift: float = 0.01,
+    n_sims: int = 50_000,
+    seed: int = 42,
+) -> float:
+    """Tranche sensitivity to correlation: dEL/dρ per 1%.
+
+    Equity: rho01 < 0 (higher ρ reduces equity tranche loss).
+    Senior: rho01 > 0 (higher ρ increases senior tranche loss).
+    """
+    el_base = expected_tranche_loss(
+        attachment, detachment, survival_curves,
+        discount_curve, correlation, T, recovery, n_sims, seed,
+    )
+    rho_bumped = min(correlation + shift, 0.999)
+    el_bumped = expected_tranche_loss(
+        attachment, detachment, survival_curves,
+        discount_curve, rho_bumped, T, recovery, n_sims, seed,
+    )
+    return (el_bumped - el_base) / shift
+
+
+# ---------------------------------------------------------------------------
+# Base correlation interpolation
+# ---------------------------------------------------------------------------
+
+def interpolate_base_correlation(
+    calibrated: dict[float, float],
+    detachment: float,
+) -> float:
+    """Interpolate base correlation at arbitrary detachment point.
+
+    Linear interpolation between calibrated detachment points.
+    Extrapolates flat beyond the calibrated range.
+
+    Args:
+        calibrated: {detachment_point: base_correlation}.
+        detachment: target detachment point.
+
+    Returns:
+        Interpolated base correlation.
+    """
+    if not calibrated:
+        return 0.3  # default
+
+    points = sorted(calibrated.items())
+    dets = [p[0] for p in points]
+    corrs = [p[1] for p in points]
+
+    if detachment <= dets[0]:
+        return corrs[0]
+    if detachment >= dets[-1]:
+        return corrs[-1]
+
+    # Linear interpolation
+    for i in range(len(dets) - 1):
+        if dets[i] <= detachment <= dets[i + 1]:
+            frac = (detachment - dets[i]) / (dets[i + 1] - dets[i])
+            return corrs[i] + frac * (corrs[i + 1] - corrs[i])
+
+    return corrs[-1]
+
+@classmethod
+def _tranche_from_convention(cls, conv, attachment, detachment, maturity, spread, notional=10_000_000.0):
+    """Create TrancheCDS from CDSIndexSpec convention."""
+    recovery = getattr(conv, 'standard_recovery', getattr(conv, 'recovery_rate', 0.4))
+    n_names = getattr(conv, 'n_names', 125)
+    return cls(attachment, detachment, maturity, spread, notional, recovery, n_names)
+
+TrancheCDS.from_convention = _tranche_from_convention

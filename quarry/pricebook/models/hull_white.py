@@ -1,0 +1,299 @@
+"""
+Hull-White short-rate model and trinomial rate tree.
+
+Model: dr = (theta(t) - a*r) dt + sigma dW
+
+theta(t) is calibrated to match the initial term structure so that
+model-implied discount factors equal the market curve.
+
+Analytical zero-coupon bond price under Hull-White:
+    P(t, T) = A(t,T) * exp(-B(t,T) * r(t))
+    B(t,T) = (1 - exp(-a*(T-t))) / a
+    A(t,T) from forward rate matching
+
+Rate tree builds a trinomial tree for r, prices instruments via
+backward induction.
+
+    hw = HullWhite(a=0.1, sigma=0.01, curve=discount_curve)
+    price = hw.zcb_price(t=0, T=5, r0=0.05)
+    tree_price = hw.tree_zcb(T=5, n_steps=100)
+"""
+
+from __future__ import annotations
+
+import math
+from datetime import date
+
+import numpy as np
+
+from pricebook.core.day_count import date_from_year_fraction
+from pricebook.core.discount_curve import DiscountCurve
+
+
+class HullWhite:
+    """Hull-White one-factor short-rate model.
+
+    Args:
+        a: mean reversion speed.
+        sigma: short-rate volatility.
+        curve: initial discount curve (for calibrating theta(t)).
+    """
+
+    def __init__(self, a: float, sigma: float, curve: DiscountCurve):
+        if a <= 0:
+            raise ValueError(f"a must be positive, got {a}")
+        if sigma <= 0:
+            raise ValueError(f"sigma must be positive, got {sigma}")
+        self.a = a
+        self.sigma = sigma
+        self.curve = curve
+
+    def B(self, t: float, T: float) -> float:
+        """B(t, T) = (1 - exp(-a*(T-t))) / a."""
+        tau = T - t
+        if tau <= 0:
+            return 0.0
+        return (1.0 - math.exp(-self.a * tau)) / self.a
+
+    def _forward_rate(self, t: float) -> float:
+        """Instantaneous forward rate from the curve at time t."""
+        return self.curve.instantaneous_forward(t)
+
+    def _alpha(self, t: float) -> float:
+        """Hull-White α(t) = f^M(0,t) + (σ²/(2a²))·(1 − e^{−at})².
+
+        Closed-form drift adjustment that makes r(t) match today's
+        forward curve. Brigo-Mercurio (2006) eq. 3.34.
+
+        Pre-fix T1.9, `tree_european_swaption` centred the rate at
+        expiry nodes on `r0 = f(0,0)` rather than `α(T_expiry)`,
+        biasing every swaption with non-zero curvature in the forward
+        curve. For a 5y expiry on a curve rising from 1%→5%, the
+        centring error was ≈400bps in the short rate.
+        """
+        a, sigma = self.a, self.sigma
+        f0t = self._forward_rate(t)
+        return f0t + (sigma**2 / (2.0 * a**2)) * (1.0 - math.exp(-a * t))**2
+
+    def _log_A(self, t: float, T: float) -> float:
+        """log A(t, T) for the analytical bond price."""
+        ref = self.curve.reference_date
+        d_t = date_from_year_fraction(ref, t)
+        d_T = date_from_year_fraction(ref, T)
+
+        df_t = self.curve.df(d_t)
+        df_T = self.curve.df(d_T)
+
+        if df_t <= 0 or df_T <= 0:
+            return 0.0
+
+        b = self.B(t, T)
+        f_t = self._forward_rate(t)
+
+        return math.log(df_T / df_t) + b * f_t - \
+            (self.sigma**2 / (4.0 * self.a)) * (1.0 - math.exp(-2.0 * self.a * t)) * b**2
+
+    def zcb_price(self, t: float, T: float, r: float) -> float:
+        """Analytical zero-coupon bond price P(t, T) given short rate r at time t."""
+        b = self.B(t, T)
+        log_a = self._log_A(t, T)
+        return math.exp(log_a - b * r)
+
+    def _evolve_state_prices(
+        self, T: float, n_steps: int,
+    ) -> tuple[np.ndarray, float, int, float]:
+        """Evolve state prices Q on a trinomial rate tree from 0 to T.
+
+        Returns:
+            (Q, dr, j_max, r0) — state prices at time T, grid spacing,
+            max branching index, initial forward rate.
+        """
+        dt = T / n_steps
+        a, sigma = self.a, self.sigma
+        dr = sigma * math.sqrt(3.0 * dt)
+        j_max = int(math.ceil(0.1835 / (a * dt)))
+        n_nodes = 2 * j_max + 1
+        mid = j_max
+
+        Q = np.zeros(n_nodes)
+        Q[mid] = 1.0
+        ref = self.curve.reference_date
+        r0 = self._forward_rate(0.0)
+
+        for step in range(n_steps):
+            t_next = (step + 1) * dt
+            d_next = date_from_year_fraction(ref, t_next)
+            target_df = self.curve.df(d_next)
+
+            sum_q = 0.0
+            for j in range(-j_max, j_max + 1):
+                idx = j + mid
+                if Q[idx] > 0:
+                    sum_q += Q[idx] * math.exp(-j * dr * dt)
+
+            if sum_q > 0 and target_df > 0:
+                alpha = -math.log(target_df / sum_q) / dt
+            else:
+                alpha = r0
+
+            Q_new = np.zeros(n_nodes)
+            for j in range(-j_max, j_max + 1):
+                idx = j + mid
+                if Q[idx] <= 1e-20:
+                    continue
+
+                r_j = alpha + j * dr
+                discount = math.exp(-r_j * dt)
+                k = max(-j_max + 1, min(j_max - 1, j))
+
+                p_u = max(0, min(1, 1.0/6 + (j**2*a**2*dt**2 - j*a*dt)/2))
+                p_d = max(0, min(1, 1.0/6 + (j**2*a**2*dt**2 + j*a*dt)/2))
+                p_m = max(0, 1.0 - p_u - p_d)
+
+                contrib = Q[idx] * discount
+                Q_new[min(k+1, j_max) + mid] += contrib * p_u
+                Q_new[k + mid] += contrib * p_m
+                Q_new[max(k-1, -j_max) + mid] += contrib * p_d
+
+            Q = Q_new
+
+        return Q, dr, j_max, r0
+
+    def tree_zcb(self, T: float, n_steps: int = 100) -> float:
+        """Price a zero-coupon bond maturing at T using a trinomial rate tree."""
+        Q, _, _, _ = self._evolve_state_prices(T, n_steps)
+        return float(Q.sum())
+
+    def build_tree_alphas(
+        self, T: float, n_steps: int,
+    ) -> tuple[np.ndarray, float, int]:
+        """Calibrate per-step α(t) on the trinomial rate tree.
+
+        Returns ``(alphas, dr, j_max)`` where ``alphas[i]`` is the
+        time-dependent shift used at step ``i`` (i.e. for the transition
+        from t = i·dt to t = (i+1)·dt).  The short rate at tree node
+        (i, j) is ``alphas[i] + j·dr``.
+
+        This is the forward-induction tree-fitting step from Hull §32.4:
+        α at each step is solved so the tree exactly reprices today's
+        zero-coupon bond maturing at the step boundary.  Callers needing
+        backward induction (Bermudan swaptions, callable bonds) can take
+        these alphas directly and avoid duplicating the forward sweep.
+        """
+        dt = T / n_steps
+        a, sigma = self.a, self.sigma
+        dr = sigma * math.sqrt(3.0 * dt)
+        j_max = int(math.ceil(0.1835 / (a * dt)))
+        n_nodes = 2 * j_max + 1
+        mid = j_max
+
+        Q = np.zeros(n_nodes)
+        Q[mid] = 1.0
+        ref = self.curve.reference_date
+        r0 = self._forward_rate(0.0)
+        alphas = np.zeros(n_steps)
+
+        for step in range(n_steps):
+            t_next = (step + 1) * dt
+            d_next = date_from_year_fraction(ref, t_next)
+            target_df = self.curve.df(d_next)
+
+            sum_q = 0.0
+            for j in range(-j_max, j_max + 1):
+                idx = j + mid
+                if Q[idx] > 0:
+                    sum_q += Q[idx] * math.exp(-j * dr * dt)
+
+            if sum_q > 0 and target_df > 0:
+                alpha = -math.log(target_df / sum_q) / dt
+            else:
+                alpha = r0
+            alphas[step] = alpha
+
+            Q_new = np.zeros(n_nodes)
+            for j in range(-j_max, j_max + 1):
+                idx = j + mid
+                if Q[idx] <= 1e-20:
+                    continue
+                r_j = alpha + j * dr
+                discount = math.exp(-r_j * dt)
+                k = max(-j_max + 1, min(j_max - 1, j))
+
+                # Textbook Hull-White trinomial probabilities (Hull §32.4,
+                # eq. 32.10 in 11th ed): the drift term is divided by 2.
+                p_u = max(0.0, min(1.0, 1.0/6 + (j**2*a**2*dt**2 - j*a*dt)/2))
+                p_d = max(0.0, min(1.0, 1.0/6 + (j**2*a**2*dt**2 + j*a*dt)/2))
+                p_m = max(0.0, 1.0 - p_u - p_d)
+
+                contrib = Q[idx] * discount
+                Q_new[min(k+1, j_max) + mid] += contrib * p_u
+                Q_new[k + mid] += contrib * p_m
+                Q_new[max(k-1, -j_max) + mid] += contrib * p_d
+
+            Q = Q_new
+
+        return alphas, dr, j_max
+
+    def tree_european_swaption(
+        self,
+        expiry_T: float,
+        swap_end_T: float,
+        strike: float,
+        n_steps: int = 100,
+        is_payer: bool = True,
+        payments_per_year: int = 1,
+    ) -> float:
+        """Price a European swaption on the Hull-White tree.
+
+        At expiry, compute swap value using analytical bond prices,
+        then take max(swap_value, 0) weighted by state prices.
+
+        Fix T3.13: pre-fix payment frequency was hard-coded to 1/year and
+        the number of payments was `int(swap_end_T − expiry_T)`, truncating
+        non-integer tenors (e.g. a 2.5y tenor became 2y, losing the final
+        partial year).  The payment-date generator `expiry_T + k` (for
+        k=1..n_payments) also assumed annual spacing.  Post-fix accepts a
+        `payments_per_year` argument (defaults to 1 for backwards compat
+        with the existing analytical-formula tests) and computes payment
+        times as `expiry_T + k / payments_per_year`, with the count rounded
+        to the nearest integer over the swap tenor.
+        """
+        Q, dr, j_max, r0 = self._evolve_state_prices(expiry_T, n_steps)
+        mid = j_max
+
+        # Fix T1.9: rates at the expiry nodes are α(T_expiry) + j·dr, NOT
+        # r0 + j·dr. Pre-fix the entire grid was centred on today's short
+        # rate — a 5y expiry on a 1%→5% curve produced a ~400bp bias in
+        # every node, mispricing the swaption by far more than the typical
+        # vol calibration tolerance.
+        alpha_expiry = self._alpha(expiry_T)
+
+        # Payment grid (fixed leg): n_payments at intervals 1 / freq.
+        tau = 1.0 / payments_per_year
+        n_payments = max(1, int(round((swap_end_T - expiry_T) * payments_per_year)))
+        pay_times = [expiry_T + k * tau for k in range(1, n_payments + 1)]
+        # Truncate if the last payment overshoots (rounding tolerance).
+        pay_times = [t for t in pay_times if t <= swap_end_T + 1e-9]
+
+        total = 0.0
+        for j in range(-j_max, j_max + 1):
+            idx = j + mid
+            if Q[idx] <= 1e-20:
+                continue
+
+            r_j = alpha_expiry + j * dr
+
+            p_end = self.zcb_price(expiry_T, swap_end_T, r_j)
+            annuity = 0.0
+            for t_pay in pay_times:
+                annuity += tau * self.zcb_price(expiry_T, t_pay, r_j)
+
+            # Fixed leg pays `strike · τ` per period; floating leg pays
+            # 1 − P(T_e, T_n).  Payer swap PV = 1 − P_end − strike · τ · Σ P_pay.
+            swap_pv = (1.0 - p_end) - strike * annuity
+            if not is_payer:
+                swap_pv = -swap_pv
+
+            total += Q[idx] * max(swap_pv, 0.0)
+
+        return total

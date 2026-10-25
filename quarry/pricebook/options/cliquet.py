@@ -1,0 +1,266 @@
+"""Cliquet (ratchet) option: periodic reset with local/global caps and floors.
+
+Each period: local_return = clip(S(end)/S(start) - 1, local_floor, local_cap).
+Total payoff = clip(Σ local_returns, global_floor, global_cap) × notional.
+
+    from pricebook.options.cliquet import Cliquet
+
+    cliq = Cliquet(reset_dates=[...], local_floor=0.0, local_cap=0.05,
+                    global_floor=0.0, global_cap=0.30, notional=1_000_000)
+    result = cliq.price_mc(spot=100, curve=ois, vol=0.20)
+
+References:
+    Wilmott, *Paul Wilmott on Quantitative Finance*, Vol. 2, Ch. 25.
+    Bouzoubaa & Osseiran, *Exotic Options and Hybrids*, Ch. 8.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from datetime import date, timedelta
+from typing import Any
+
+import numpy as np
+
+from pricebook.core.day_count import DayCountConvention, year_fraction
+from pricebook.core.discount_curve import DiscountCurve
+from pricebook.core.serialisable import _register
+
+
+@dataclass
+class CliquetResult:
+    """Cliquet pricing result."""
+    price: float
+    std_error: float = 0.0
+    n_paths: int = 0
+    avg_total_return: float = 0.0
+    avg_capped_periods: float = 0.0   # avg periods hitting local cap
+    avg_floored_periods: float = 0.0  # avg periods hitting local floor
+
+    def to_dict(self) -> dict:
+        return {"price": self.price, "std_error": self.std_error,
+                "n_paths": self.n_paths, "avg_total_return": self.avg_total_return,
+                "avg_capped_periods": self.avg_capped_periods,
+                "avg_floored_periods": self.avg_floored_periods}
+
+
+class Cliquet:
+    """Cliquet (ratchet) option with local and global caps/floors.
+
+    At each reset period [t_{i-1}, t_i], the local return is:
+        R_i = clip(S(t_i)/S(t_{i-1}) - 1, local_floor, local_cap)
+
+    The total payoff at maturity is:
+        payoff = notional × clip(Σ R_i, global_floor, global_cap)
+
+    Args:
+        reset_dates: period end dates (first period starts at valuation).
+        local_floor: minimum return per period (e.g. 0.0 for no downside).
+        local_cap: maximum return per period (e.g. 0.05 for 5% cap).
+        global_floor: minimum total return (e.g. 0.0).
+        global_cap: maximum total return (e.g. 0.30 for 30% cap).
+        notional: position size.
+    """
+
+    _SERIAL_TYPE = "cliquet"
+
+    def __init__(
+        self,
+        reset_dates: list[date],
+        local_floor: float = 0.0,
+        local_cap: float = 0.10,
+        global_floor: float = 0.0,
+        global_cap: float = 1.0,
+        notional: float = 1_000_000.0,
+    ):
+        if len(reset_dates) < 1:
+            raise ValueError("need at least 1 reset date")
+        if local_cap < local_floor:
+            raise ValueError(f"local_cap ({local_cap}) must be >= local_floor ({local_floor})")
+        if global_cap < global_floor:
+            raise ValueError(f"global_cap ({global_cap}) must be >= global_floor ({global_floor})")
+        self.reset_dates = sorted(reset_dates)
+        self.local_floor = local_floor
+        self.local_cap = local_cap
+        self.global_floor = global_floor
+        self.global_cap = global_cap
+        self.notional = notional
+
+    @property
+    def maturity(self) -> date:
+        return self.reset_dates[-1]
+
+    @property
+    def n_periods(self) -> int:
+        return len(self.reset_dates)
+
+    def price_mc(
+        self,
+        spot: float,
+        curve: DiscountCurve,
+        vol: float,
+        div_yield: float = 0.0,
+        n_paths: int = 100_000,
+        seed: int = 42,
+    ) -> CliquetResult:
+        """Price via Monte Carlo."""
+        ref = curve.reference_date
+        if spot <= 0:
+            raise ValueError(f"spot must be positive, got {spot}")
+        reset_times = [year_fraction(ref, d, DayCountConvention.ACT_365_FIXED)
+                       for d in self.reset_dates]
+        T = reset_times[-1]
+        df = curve.df(self.maturity)
+
+        # Per-segment forward rates so each period's drift matches the
+        # curve's local term structure.  Fix T4-CLQ1 (analogue of
+        # T4-TARF1 in v1.047): pre-fix used a single flat ``rate =
+        # -log(curve.df(T))/T`` for every period's drift.  For non-flat
+        # curves this biased the path distribution (and therefore the
+        # local-return distribution that the cliquet pay-off depends on)
+        # by injecting an average rate that didn't match the forward
+        # rate at each reset date.  Terminal discount is unchanged
+        # (still exp(-r_avg · T) = curve.df(T) exactly).
+        seg_dfs = [curve.df(self.reset_dates[0])] + [
+            curve.df(self.reset_dates[i]) / curve.df(self.reset_dates[i - 1])
+            for i in range(1, len(self.reset_dates))
+        ]
+        seg_rate = []
+        t_prev_calc = 0.0
+        for i, t in enumerate(reset_times):
+            dt_i = t - t_prev_calc
+            seg_rate.append(-math.log(max(seg_dfs[i], 1e-300)) / max(dt_i, 1e-10))
+            t_prev_calc = t
+
+        rng = np.random.default_rng(seed)
+
+        S_prev = np.full(n_paths, spot, dtype=float)
+        total_return = np.zeros(n_paths)
+        n_capped = np.zeros(n_paths)
+        n_floored = np.zeros(n_paths)
+
+        t_prev = 0.0
+        for i, t in enumerate(reset_times):
+            dt = t - t_prev
+            sqrt_dt = math.sqrt(max(dt, 1e-10))
+            Z = rng.standard_normal(n_paths)
+            r_seg = seg_rate[i]
+            S = S_prev * np.exp((r_seg - div_yield - 0.5 * vol**2) * dt + vol * sqrt_dt * Z)
+
+            # Local return
+            local_ret = S / S_prev - 1.0
+            capped = local_ret > self.local_cap
+            floored = local_ret < self.local_floor
+            n_capped += capped.astype(float)
+            n_floored += floored.astype(float)
+
+            clipped = np.clip(local_ret, self.local_floor, self.local_cap)
+            total_return += clipped
+
+            S_prev = S.copy()
+            t_prev = t
+
+        # Global clip
+        payoff = np.clip(total_return, self.global_floor, self.global_cap)
+        discounted = df * payoff * self.notional
+
+        price = float(discounted.mean())
+        std_err = float(discounted.std(ddof=1) / math.sqrt(n_paths))
+
+        return CliquetResult(
+            price=price, std_error=std_err, n_paths=n_paths,
+            avg_total_return=float(total_return.mean()),
+            avg_capped_periods=float(n_capped.mean()),
+            avg_floored_periods=float(n_floored.mean()),
+        )
+
+
+    def greeks(self, spot, curve, vol, div_yield=0.0, n_paths=50_000, seed=42):
+        """Bump-and-reprice Greeks: delta, gamma, vega."""
+        base = self.price_mc(spot, curve, vol, div_yield, n_paths, seed)
+        bump = spot * 0.01
+        up = self.price_mc(spot + bump, curve, vol, div_yield, n_paths, seed)
+        dn = self.price_mc(spot - bump, curve, vol, div_yield, n_paths, seed)
+        delta = (up.price - dn.price) / (2 * bump)
+        gamma = (up.price - 2 * base.price + dn.price) / (bump ** 2)
+        v_up = self.price_mc(spot, curve, vol + 0.01, div_yield, n_paths, seed)
+        vega = v_up.price - base.price
+        return {"delta": delta, "gamma": gamma, "vega": vega, "price": base.price}
+
+    def pv_ctx(self, ctx) -> float:
+        # Silent-no-op API: prior impl hardcoded ``spot=100.0`` regardless
+        # of the actual underlying.  ``PricingContext`` carries no
+        # ``equity_spots`` field, so we cannot fulfil this call
+        # generically — raise loudly instead of guessing.
+        raise NotImplementedError(
+            "Cliquet.pv_ctx is not implemented: PricingContext "
+            "does not currently expose equity spots.  Price directly via "
+            "``.price_mc(spot, curve, vol)`` with an explicit spot."
+        )
+
+    # ---- Serialisation ----
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self._SERIAL_TYPE, "params": {
+            "reset_dates": [d.isoformat() for d in self.reset_dates],
+            "local_floor": self.local_floor, "local_cap": self.local_cap,
+            "global_floor": self.global_floor, "global_cap": self.global_cap,
+            "notional": self.notional,
+        }}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Cliquet:
+        p = d["params"]
+        return cls(
+            reset_dates=[date.fromisoformat(s) for s in p["reset_dates"]],
+            local_floor=p.get("local_floor", 0.0),
+            local_cap=p.get("local_cap", 0.10),
+            global_floor=p.get("global_floor", 0.0),
+            global_cap=p.get("global_cap", 1.0),
+            notional=p.get("notional", 1_000_000.0),
+        )
+
+
+_register(Cliquet)
+
+
+# ---------------------------------------------------------------------------
+# Unified MC Engine migration
+# ---------------------------------------------------------------------------
+
+def cliquet_via_engine(
+    spot: float,
+    curve: DiscountCurve,
+    vol: float,
+    T: float,
+    local_cap: float = 0.10,
+    local_floor: float = 0.0,
+    global_cap: float = 1.0,
+    global_floor: float = 0.0,
+    n_periods: int = 12,
+    notional: float = 1_000_000.0,
+    div_yield: float = 0.0,
+    n_paths: int = 100_000,
+    seed: int = 42,
+) -> CliquetResult:
+    """Cliquet priced via the unified MC engine.
+
+    Drop-in replacement for Cliquet.price_mc() using MCEngine.
+    """
+    from pricebook.models.mc_engine import MCEngine, TimeGrid
+    from pricebook.models.mc_processes import BlackScholesProcess
+    from pricebook.models.mc_payoffs import cliquet_payoff
+
+    ref = curve.reference_date
+    rate = -math.log(curve.df(ref + timedelta(days=int(T * 365)))) / max(T, 1e-10)
+
+    process = BlackScholesProcess(spot, rate - div_yield, vol)
+    engine = MCEngine(process, TimeGrid.uniform(T, n_periods), n_paths, seed, antithetic=True)
+    payoff = cliquet_payoff(cap=local_cap, floor=local_floor, global_floor=global_floor)
+    result = engine.price(payoff, math.exp(-rate * T))
+
+    return CliquetResult(
+        price=result.price * notional, std_error=result.stderr * notional,
+        n_paths=result.n_paths,
+    )

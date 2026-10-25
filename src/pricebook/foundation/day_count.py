@@ -1,0 +1,332 @@
+"""Day-count conventions and `year_fraction` (L0).
+
+Finance-free: how a span of time is counted, not what it is worth. Ten conventions —
+the seven market-standard ones plus the ACT/365L, 30E/360 ISDA and NL/365 gaps.
+
+Two conventions need context, passed explicitly (no hidden defaults):
+  - ACT/ACT ICMA takes coupon-period anchors via `CouponPeriod` — **strict**: missing
+    anchors raise (the quarry's `strict_icma=False` silently fell back to ACT/365F and
+    priced a UST coupon at 1.9836 instead of 2.0000). `strict_icma` is deleted.
+  - BUS/252 takes the business-day `Calendar` — **required**: no calendar raises (the
+    quarry silently defaulted to São Paulo).
+
+Provenance:
+  quarry: quarry/pricebook/core/day_count.py
+  source: ISDA 2006 §4.16; ICMA Rule 251; Brazilian BUS/252 (ANBIMA)
+  oracle: ISDA §4.16 worked examples; ICMA Rule 251 (UST coupon = exactly 2.0000);
+          30U/360 February edge cases; ACT/365L / NL/365 leap-day handling
+  slice:  daycounts (Topic 0 S2)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, timedelta
+from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pricebook.foundation.calendars import CalendarProtocol
+
+
+class DayCountConvention(Enum):
+    ACT_360 = "ACT/360"
+    ACT_365_FIXED = "ACT/365F"
+    THIRTY_360 = "30U/360"  # US SIA, with the February rules
+    THIRTY_E_360 = "30E/360"  # Eurobond basis
+    ACT_ACT_ISDA = "ACT/ACT ISDA"
+    ACT_ACT_ICMA = "ACT/ACT ICMA"
+    BUS_252 = "BUS/252"
+    ACT_365L = "ACT/365L"  # gap: leap-aware denominator
+    THIRTY_E_360_ISDA = "30E/360 ISDA"  # gap: last-day-of-month + termination rule
+    NL_365 = "NL/365"  # gap: no-leap (exclude 29 Feb)
+    ONE_ONE = "1/1"  # ISDA §4.16(a) — always 1
+    ACT_ACT_AFB = "ACT/ACT AFB"  # French AFB — whole years + leap-aware stub
+
+
+@dataclass(frozen=True)
+class CouponPeriod:
+    """The coupon period's convention context, serving three conventions: ICMA
+    reference anchors + `frequency` (Rule 251, and the ACT/365L annual-vs-frequent
+    denominator, ISDA §4.16(i)) and `is_final` (the 30E/360-ISDA termination rule).
+    Bundles what they need so `year_fraction` stays ≤5 args."""
+
+    reference_start: date
+    reference_end: date
+    frequency: int
+    is_final: bool = False
+
+
+def year_fraction(
+    start: date,
+    end: date,
+    convention: DayCountConvention,
+    *,
+    coupon_period: CouponPeriod | None = None,
+    calendar: "CalendarProtocol | None" = None,
+) -> float:
+    """Year fraction of ``[start, end)`` under `convention`. `coupon_period` is
+    required for ACT/ACT ICMA (and carries the 30E/360-ISDA final flag); `calendar`
+    is required for BUS/252. A reversed span (`end < start`) raises (S14)."""
+    if end < start:
+        raise ValueError(f"year_fraction requires start <= end; got {start}..{end}")
+    C = DayCountConvention
+    if convention is C.ACT_360:
+        return (end - start).days / 360.0
+    if convention is C.ACT_365_FIXED:
+        return (end - start).days / 365.0
+    if convention is C.THIRTY_360:
+        return _thirty_360(start, end)
+    if convention is C.THIRTY_E_360:
+        return _thirty_e_360(start, end)
+    if convention is C.THIRTY_E_360_ISDA:
+        is_final = coupon_period.is_final if coupon_period is not None else False
+        return _thirty_e_360_isda(start, end, is_final)
+    if convention is C.ACT_ACT_ISDA:
+        return _act_act_isda(start, end)
+    if convention is C.ACT_ACT_ICMA:
+        return _act_act_icma(start, end, coupon_period)
+    if convention is C.ACT_365L:
+        return _act_365l(start, end, coupon_period)
+    if convention is C.NL_365:
+        return _nl_365(start, end)
+    if convention is C.ONE_ONE:
+        return 1.0
+    if convention is C.ACT_ACT_AFB:
+        return _act_act_afb(start, end)
+    if convention is C.BUS_252:
+        if calendar is None:
+            raise ValueError("BUS/252 requires a calendar (no default).")
+        return business_days_between(start, end, calendar) / 252.0
+    raise ValueError(f"unsupported convention: {convention}")
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────────
+def _is_leap(year: int) -> bool:
+    return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+
+
+def _last_day_of_month(d: date) -> int:
+    if d.month == 12:
+        return 31
+    return (date(d.year, d.month + 1, 1) - timedelta(days=1)).day
+
+
+def _is_last_of_feb(d: date) -> bool:
+    return d.month == 2 and d.day == (29 if _is_leap(d.year) else 28)
+
+
+def _30_360(d1: int, d2: int, start: date, end: date) -> float:
+    days = 360 * (end.year - start.year) + 30 * (end.month - start.month) + (d2 - d1)
+    return days / 360.0
+
+
+def _thirty_360(start: date, end: date) -> float:
+    """30U/360 (US SIA) with the end-of-February adjustments (ISDA §4.16 30/360 US)."""
+    d1, d2 = start.day, end.day
+    if _is_last_of_feb(start):
+        d1 = 30
+    if d1 == 31:
+        d1 = 30
+    if _is_last_of_feb(end) and _is_last_of_feb(start):
+        d2 = 30
+    if d2 == 31 and d1 == 30:
+        d2 = 30
+    return _30_360(d1, d2, start, end)
+
+
+def _thirty_e_360(start: date, end: date) -> float:
+    """30E/360 (Eurobond basis): d=31 → 30 unconditionally for both ends; no Feb rule."""
+    return _30_360(min(start.day, 30), min(end.day, 30), start, end)
+
+
+def _thirty_e_360_isda(start: date, end: date, is_final: bool) -> float:
+    """30E/360 ISDA (§4.16): last day of month → 30 for both ends, EXCEPT d2 is not
+    adjusted when `end` is the termination date and falls in February."""
+    d1 = 30 if start.day == _last_day_of_month(start) else start.day
+    d2 = end.day
+    if end.day == _last_day_of_month(end) and not (is_final and end.month == 2):
+        d2 = 30
+    return _30_360(d1, d2, start, end)
+
+
+def _act_act_isda(start: date, end: date) -> float:
+    """ACT/ACT ISDA: days in each calendar year over that year's length, summed."""
+    if start.year == end.year:
+        return (end - start).days / (366.0 if _is_leap(start.year) else 365.0)
+    total = (date(start.year + 1, 1, 1) - start).days / (
+        366.0 if _is_leap(start.year) else 365.0
+    )
+    total += float(end.year - start.year - 1)
+    total += (end - date(end.year, 1, 1)).days / (
+        366.0 if _is_leap(end.year) else 365.0
+    )
+    return total
+
+
+def _icma_add_months(d: date, months: int) -> date:
+    """Shift `d` by `months`, day-of-month preserved and clamped — for stepping the notional
+    coupon grid (coupon dates are regular, e.g. the 15th)."""
+    total = d.month - 1 + months
+    year, month = d.year + total // 12, total % 12 + 1
+    return date(year, month, min(d.day, _last_day_of_month(date(year, month, 1))))
+
+
+def icma_coupon_period(
+    accrual_start: date, accrual_end: date, front_stub: bool, frequency: int
+) -> CouponPeriod:
+    """The ICMA `CouponPeriod` for one accrual period, built from the schedule's own boundaries +
+    `is_stub` position + coupon `frequency` (Rule 251). The `reference_start` seeds the notional
+    (quasi-coupon) grid `_act_act_icma` walks: for a regular or back-stub period the period's own
+    start; for a FRONT stub the regular boundary it abuts (`accrual_end`), so the grid steps back to
+    the notional period the short first coupon belongs to. `is_final` is inert for ICMA."""
+    if front_stub:
+        reference_start = accrual_end
+        reference_end = _icma_add_months(accrual_end, 12 // frequency)
+    else:
+        reference_start, reference_end = accrual_start, accrual_end
+    return CouponPeriod(reference_start, reference_end, frequency)
+
+
+def _act_act_icma(start: date, end: date, cp: CouponPeriod | None) -> float:
+    """ACT/ACT ICMA (ICMA Rule 251, ISDA §4.16): sum over the notional (quasi-coupon) periods
+    that `[start, end)` overlaps, each term ``days_in_overlap / (frequency × notional_days)``.
+    For a regular or short period this is one term (Rule 251.1); for a long coupon it is several
+    (Rule 251.2). The notional grid is `cp`'s reference period stepped by `12/frequency` months.
+    Strict — the anchors are required, never silently replaced by ACT/365F (audit 3.5, 3b)."""
+    if cp is None:
+        raise ValueError(
+            "ACT/ACT ICMA requires coupon-period anchors (pass `coupon_period=`)."
+        )
+    if not (1 <= cp.frequency <= 12 and 12 % cp.frequency == 0) or (
+        cp.reference_end - cp.reference_start
+    ).days <= 0:
+        raise ValueError(
+            f"ACT/ACT ICMA needs a frequency dividing 12 (1,2,3,4,6,12) and "
+            f"reference_end>reference_start; got frequency={cp.frequency} "
+            f"(freq>12 hangs via a zero-month step; a non-divisor misaligns the notional grid), "
+            f"period_days={(cp.reference_end - cp.reference_start).days}."
+        )
+    period_months = 12 // cp.frequency
+    # walk the notional grid to the period at or before `start`, then across [start, end)
+    qc_start = cp.reference_start
+    while qc_start > start:
+        qc_start = _icma_add_months(qc_start, -period_months)
+    while _icma_add_months(qc_start, period_months) <= start:
+        qc_start = _icma_add_months(qc_start, period_months)
+    dcf = 0.0
+    while qc_start < end:
+        qc_end = _icma_add_months(qc_start, period_months)
+        overlap = (min(end, qc_end) - max(start, qc_start)).days
+        dcf += overlap / (cp.frequency * (qc_end - qc_start).days)
+        qc_start = qc_end
+    return dcf
+
+
+def _leap_days_in(start: date, end: date) -> int:
+    """Number of 29-Februaries in ``[start, end)``."""
+    count = 0
+    for year in range(start.year, end.year + 1):
+        if _is_leap(year):
+            feb29 = date(year, 2, 29)
+            if start <= feb29 < end:
+                count += 1
+    return count
+
+
+def _act_365l(start: date, end: date, cp: CouponPeriod | None) -> float:
+    """ACT/365L (ISDA §4.16(i)) — frequency-dependent denominator:
+    annual (or no frequency context) → 366 iff a 29 Feb lies in the period, else 365;
+    more frequent than annual → 366 iff the period END date is in a leap year, else 365."""
+    frequency = cp.frequency if cp is not None else 1
+    if frequency <= 1:
+        denom = 366.0 if _leap_days_in(start, end) else 365.0
+    else:
+        denom = 366.0 if _is_leap(end.year) else 365.0
+    return (end - start).days / denom
+
+
+def _nl_365(start: date, end: date) -> float:
+    """NL/365 (no-leap): actual days minus any 29-Februaries, over 365."""
+    return ((end - start).days - _leap_days_in(start, end)) / 365.0
+
+
+def _shift_years(d: date, n: int) -> date:
+    try:
+        return date(d.year + n, d.month, d.day)
+    except ValueError:  # 29 Feb → 28 Feb when the target year is not leap
+        return date(d.year + n, 2, 28)
+
+
+def _act_act_afb(start: date, end: date) -> float:
+    """ACT/ACT AFB (French): whole years counted back from `end` — each boundary computed
+    FROM `end` directly (`end − k·years`), not by accumulating single-year clamps, so a
+    leap-to-leap span stays exactly whole (audit 1.1). Stub at the start over 365 (or 366
+    if a 29 Feb lies in it)."""
+    years = 0
+    while _shift_years(end, -(years + 1)) >= start:
+        years += 1
+    stub_boundary = _shift_years(end, -years)
+    denom = 366.0 if _leap_days_in(start, stub_boundary) else 365.0
+    return years + (stub_boundary - start).days / denom
+
+
+def business_days_between(start: date, end: date, calendar: "CalendarProtocol") -> int:
+    """Business days in ``[start, end)`` — start-inclusive, end-exclusive. This is the ONE
+    business-day primitive: it matches `_overnight_days` (the CDI/RFR accrual window), so a
+    BUS/252 discount factor and a CDI accrual count the same days (audit 1.3 / ruling A2).
+    The former S16 invariant — `(start, end]`, "no consumer needs the alternative" — was
+    wrong (the CDI consumer did) and is withdrawn."""
+    count, cur = 0, start
+    while cur < end:
+        if calendar.is_business_day(cur):
+            count += 1
+        cur += timedelta(days=1)
+    return count
+
+
+@dataclass(frozen=True)
+class Accrual:
+    """A day-count period: its span and convention (A1 — a *time-period* value object, an
+    applied day count, so it lives with `year_fraction`, not with cashflows). `year_fraction`
+    is the ergonomic wrapper over the L0 primitive (start + end + day_count bundled). An
+    accrual is ordered by construction — a reversed or zero-length span raises (S14)."""
+
+    start: date
+    end: date
+    day_count: DayCountConvention
+
+    def __post_init__(self) -> None:
+        if self.end <= self.start:
+            raise ValueError(
+                f"accrual must be ordered (start < end); got {self.start}..{self.end}"
+            )
+
+    def year_fraction(
+        self,
+        *,
+        coupon_period: CouponPeriod | None = None,
+        calendar: "CalendarProtocol | None" = None,
+    ) -> float:
+        return year_fraction(
+            self.start,
+            self.end,
+            self.day_count,
+            coupon_period=coupon_period,
+            calendar=calendar,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "start": self.start.isoformat(),
+            "end": self.end.isoformat(),
+            "day_count": self.day_count.value,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Accrual":
+        return cls(
+            date.fromisoformat(d["start"]),
+            date.fromisoformat(d["end"]),
+            DayCountConvention(d["day_count"]),
+        )

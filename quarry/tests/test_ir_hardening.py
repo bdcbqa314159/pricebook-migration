@@ -1,0 +1,207 @@
+"""Tests for IR hardening fixes."""
+
+from datetime import date, timedelta
+
+import pytest
+
+from pricebook.fixed_income.swap import InterestRateSwap
+from pricebook.fixed_income.basis_swap import BasisSwap
+from pricebook.core.day_count import DayCountConvention
+from pricebook.core.fixings import FixingsStore
+from pricebook.fixed_income.ois import OISSwap
+from pricebook.core.schedule import Frequency
+from pricebook.fixed_income.swap import InterestRateSwap, SwapDirection
+from pricebook.fixed_income.zc_swap import ZeroCouponSwap
+from tests.conftest import make_flat_curve
+
+
+# ---- #3: Swap passes payment_delay to FixedLeg ----
+
+class TestSwapFixedLegDelay:
+    def test_fixed_leg_gets_delay(self):
+        """FixedLeg should receive payment_delay_days from swap."""
+        swap = InterestRateSwap(
+            date(2026, 4, 21), date(2031, 4, 21), fixed_rate=0.04,
+            payment_delay_days=2,
+        )
+        for cf in swap.fixed_leg.cashflows:
+            assert cf.payment_date == cf.accrual_end + timedelta(days=2)
+
+    def test_both_legs_delayed(self):
+        """Both fixed and floating legs should have the same delay."""
+        swap = InterestRateSwap(
+            date(2026, 4, 21), date(2031, 4, 21), fixed_rate=0.04,
+            payment_delay_days=2,
+        )
+        for fcf, flcf in zip(swap.fixed_leg.cashflows, swap.floating_leg.cashflows):
+            assert fcf.payment_date != fcf.accrual_end
+            assert flcf.payment_date != flcf.accrual_end
+
+    def test_no_delay_backward_compat(self):
+        swap = InterestRateSwap(
+            date(2026, 4, 21), date(2031, 4, 21), fixed_rate=0.04,
+        )
+        for cf in swap.fixed_leg.cashflows:
+            assert cf.payment_date == cf.accrual_end
+
+
+# ---- #5: Amortising swap via factory ----
+
+class TestAmortisingSwapFactory:
+    def test_factory_importable(self):
+        assert hasattr(InterestRateSwap, 'amortising')
+
+    def test_amortising_factory(self):
+        swap = InterestRateSwap.amortising(
+            date(2026, 4, 21), date(2031, 4, 21), 0.04, 1_000_000,
+        )
+        assert swap.notional_schedule[0] > swap.notional_schedule[-1]
+
+
+# ---- #8: ZC swap day_count parameter ----
+
+class TestZCSwapDayCount:
+    def test_default_act365(self):
+        zc = ZeroCouponSwap(date(2026, 4, 21), date(2031, 4, 21), 0.04)
+        assert zc.day_count == DayCountConvention.ACT_365_FIXED
+
+    def test_act360(self):
+        """EUR ZC swap uses ACT/360."""
+        zc = ZeroCouponSwap(
+            date(2026, 4, 21), date(2031, 4, 21), 0.04,
+            day_count=DayCountConvention.ACT_360,
+        )
+        assert zc.day_count == DayCountConvention.ACT_360
+        # Tenor should differ from ACT/365
+        zc_365 = ZeroCouponSwap(date(2026, 4, 21), date(2031, 4, 21), 0.04)
+        assert zc.fixed_amount() != zc_365.fixed_amount()
+
+    def test_par_rate_with_day_count(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        zc = ZeroCouponSwap(ref, date(2031, 4, 21), 0.04,
+                            day_count=DayCountConvention.ACT_360)
+        pr = zc.par_rate(curve)
+        assert pr > 0
+
+
+# ---- #9: Swap DV01 ----
+
+class TestSwapDV01:
+    def test_payer_dv01_positive(self):
+        """Payer swap (receive float) gains when rates rise → DV01 > 0."""
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap = InterestRateSwap(ref, date(2031, 4, 21), fixed_rate=0.04,
+                                direction=SwapDirection.PAYER)
+        dv01 = swap.dv01(curve)
+        assert dv01 > 0
+
+    def test_receiver_dv01_negative(self):
+        """Receiver swap (pay float) loses when rates rise → DV01 < 0."""
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap = InterestRateSwap(ref, date(2031, 4, 21), fixed_rate=0.04,
+                                direction=SwapDirection.RECEIVER)
+        dv01 = swap.dv01(curve)
+        assert dv01 < 0
+
+    def test_dv01_scales_with_notional(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap1 = InterestRateSwap(ref, date(2031, 4, 21), 0.04, notional=1_000_000)
+        swap2 = InterestRateSwap(ref, date(2031, 4, 21), 0.04, notional=2_000_000)
+        assert swap2.dv01(curve) == pytest.approx(2 * swap1.dv01(curve), rel=1e-6)
+
+    def test_longer_swap_larger_dv01(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap_5y = InterestRateSwap(ref, date(2031, 4, 21), 0.04)
+        swap_10y = InterestRateSwap(ref, date(2036, 4, 21), 0.04)
+        assert abs(swap_10y.dv01(curve)) > abs(swap_5y.dv01(curve))
+
+
+# ---- #10: Swap annuity ----
+
+class TestSwapAnnuity:
+    def test_annuity_positive(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap = InterestRateSwap(ref, date(2031, 4, 21), 0.04)
+        assert swap.annuity(curve) > 0
+
+    def test_annuity_matches_fixed_leg(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap = InterestRateSwap(ref, date(2031, 4, 21), 0.04)
+        assert swap.annuity(curve) == pytest.approx(swap.fixed_leg.annuity(curve))
+
+    def test_par_rate_uses_annuity(self):
+        """par_rate = PV_float / (notional × annuity)."""
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap = InterestRateSwap(ref, date(2031, 4, 21), 0.04)
+        pv_float = swap.floating_leg.pv(curve)
+        expected_par = pv_float / (swap.notional * swap.annuity(curve))
+        assert swap.par_rate(curve) == pytest.approx(expected_par, rel=1e-10)
+
+
+# ---- Second audit fixes ----
+
+# #4: OIS dv01 + annuity
+
+class TestOISDV01:
+    def test_ois_dv01_nonzero(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        ois = OISSwap(ref, date(2031, 4, 21), 0.04)
+        assert ois.dv01(curve) != 0.0
+
+    def test_ois_annuity_positive(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        ois = OISSwap(ref, date(2031, 4, 21), 0.04)
+        assert ois.annuity(curve) > 0
+
+
+# #5: BasisSwap dv01
+
+class TestBasisSwapDV01:
+    def test_basis_dv01(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        proj1 = make_flat_curve(ref, rate=0.042)
+        proj2 = make_flat_curve(ref, rate=0.041)
+        bs = BasisSwap(ref, date(2031, 4, 21), spread=0.001)
+        dv01 = bs.dv01(curve, proj1, proj2)
+        assert isinstance(dv01, float)
+
+
+# #9: Swap pv with fixings
+
+class TestSwapWithFixings:
+    def test_seasoned_swap_uses_fixings(self):
+        """Seasoned swap should use historical fixings for past periods."""
+        ref = date(2027, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap = InterestRateSwap(
+            date(2026, 4, 21), date(2028, 4, 21), fixed_rate=0.04,
+        )
+        store = FixingsStore()
+        # Set fixings for past floating periods
+        for cf in swap.floating_leg.cashflows:
+            if cf.fixing_date <= ref:
+                store.set("SOFR", cf.fixing_date, 0.05)
+
+        pv_with = swap.pv(curve, fixings=store, rate_name="SOFR")
+        pv_without = swap.pv(curve)
+        # Fixings at 5% vs forward ~4% → different PV
+        assert pv_with != pytest.approx(pv_without, rel=1e-4)
+
+    def test_swap_pv_no_fixings_backward_compat(self):
+        ref = date(2026, 4, 21)
+        curve = make_flat_curve(ref, rate=0.04)
+        swap = InterestRateSwap(ref, date(2031, 4, 21), 0.04)
+        pv1 = swap.pv(curve)
+        pv2 = swap.pv(curve, fixings=None, rate_name=None)
+        assert pv1 == pytest.approx(pv2, rel=1e-14)

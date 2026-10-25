@@ -1,0 +1,264 @@
+"""Overnight index swap (OIS)."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+
+from pricebook.core.day_count import DayCountConvention, year_fraction
+from pricebook.core.discount_curve import DiscountCurve
+from pricebook.core.serialisable import serialisable_convention
+from pricebook.fixed_income.fixed_leg import FixedLeg
+from pricebook.core.schedule import Frequency, StubType, generate_schedule
+from pricebook.core.calendar import Calendar, BusinessDayConvention, get_calendar
+from pricebook.core.solvers import brentq
+from pricebook.core.interpolation import InterpolationMethod
+from pricebook.calibration import curve_calibration_record, pillar_parameters
+
+
+@serialisable_convention("ois_convention")
+@dataclass(frozen=True)
+class OISConvention:
+    """OIS market convention for a currency."""
+    currency: str
+    fixed_frequency: Frequency
+    day_count: DayCountConvention
+    calendar_currency: str
+    settlement_days: int = 2
+    payment_delay_days: int = 2
+
+    def create_swap(self, start: date, end: date, fixed_rate: float,
+                    notional: float = 1_000_000.0) -> OISSwap:
+        """Create an OISSwap with these conventions."""
+        cal = get_calendar(self.calendar_currency)
+        return OISSwap(
+            start, end, fixed_rate, notional,
+            self.fixed_frequency, self.day_count, cal,
+        )
+
+
+_OIS_CONVENTIONS: dict[str, OISConvention] = {
+    "USD": OISConvention("USD", Frequency.ANNUAL, DayCountConvention.ACT_360, "USD"),
+    "EUR": OISConvention("EUR", Frequency.ANNUAL, DayCountConvention.ACT_360, "EUR"),
+    "GBP": OISConvention("GBP", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "GBP"),
+    "JPY": OISConvention("JPY", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "JPY"),
+    "CHF": OISConvention("CHF", Frequency.ANNUAL, DayCountConvention.ACT_360, "CHF"),
+    "CAD": OISConvention("CAD", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "CAD"),
+    "AUD": OISConvention("AUD", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "AUD"),
+    "NZD": OISConvention("NZD", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "NZD"),
+    "SEK": OISConvention("SEK", Frequency.ANNUAL, DayCountConvention.ACT_360, "SEK"),
+    "NOK": OISConvention("NOK", Frequency.ANNUAL, DayCountConvention.ACT_360, "NOK"),
+    "DKK": OISConvention("DKK", Frequency.ANNUAL, DayCountConvention.ACT_360, "DKK"),
+    # Asia
+    "CNY": OISConvention("CNY", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "CNY"),
+    "KRW": OISConvention("KRW", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "KRW"),
+    "SGD": OISConvention("SGD", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "SGD"),
+    "HKD": OISConvention("HKD", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "HKD"),
+    "THB": OISConvention("THB", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "THB"),
+    "INR": OISConvention("INR", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "INR"),
+    "IDR": OISConvention("IDR", Frequency.ANNUAL, DayCountConvention.ACT_360, "IDR"),
+    "MYR": OISConvention("MYR", Frequency.ANNUAL, DayCountConvention.ACT_365_FIXED, "MYR"),
+    "PHP": OISConvention("PHP", Frequency.ANNUAL, DayCountConvention.ACT_360, "PHP"),
+}
+
+
+def get_ois_convention(currency: str) -> OISConvention:
+    """Look up OIS convention by currency."""
+    key = currency.upper()
+    if key not in _OIS_CONVENTIONS:
+        raise ValueError(f"Unknown currency: {key}. Available: {sorted(_OIS_CONVENTIONS)}")
+    return _OIS_CONVENTIONS[key]
+
+
+class OISSwap:
+    """
+    An overnight index swap: fixed rate vs compounded overnight rate.
+
+    The floating leg pays the compounded overnight rate (SOFR, SONIA, ESTR)
+    over each accrual period. When priced off the OIS curve itself, the
+    floating PV telescopes:
+
+        PV_float = notional * (df(start) - df(end))
+
+    This makes OIS pricing and bootstrapping very efficient.
+
+    USD SOFR OIS conventions:
+        - Fixed: annual, ACT/360
+        - Floating: annual, ACT/360, compounded in arrears
+    """
+
+    def __init__(
+        self,
+        start: date,
+        end: date,
+        fixed_rate: float,
+        notional: float = 1_000_000.0,
+        fixed_frequency: Frequency = Frequency.ANNUAL,
+        day_count: DayCountConvention = DayCountConvention.ACT_360,
+        calendar: Calendar | None = None,
+        convention: BusinessDayConvention = BusinessDayConvention.MODIFIED_FOLLOWING,
+        stub: StubType = StubType.SHORT_FRONT,
+        eom: bool = True,
+    ):
+        self.start = start
+        self.end = end
+        self.fixed_rate = fixed_rate
+        self.notional = notional
+        self.fixed_frequency = fixed_frequency
+        self.day_count = day_count
+        self.calendar = calendar
+        self.convention = convention
+        self.stub = stub
+        self.eom = eom
+
+        self.fixed_leg = FixedLeg(
+            start, end, fixed_rate, fixed_frequency,
+            notional=notional, day_count=day_count,
+            calendar=calendar, convention=convention, stub=stub, eom=eom,
+        )
+
+    def pv_float(self, curve: DiscountCurve) -> float:
+        """Floating leg PV via telescoping: notional * (df(start) - df(end))."""
+        return self.notional * (curve.df(self.start) - curve.df(self.end))
+
+    def pv(self, curve: DiscountCurve) -> float:
+        """PV of payer OIS: receive float, pay fixed."""
+        return self.pv_float(curve) - self.fixed_leg.pv(curve)
+
+    def par_rate(self, curve: DiscountCurve) -> float:
+        """The fixed rate that makes PV = 0."""
+        annuity = self.fixed_leg.annuity(curve)
+        return self.pv_float(curve) / (self.notional * annuity)
+
+    def annuity(self, curve: DiscountCurve) -> float:
+        """Fixed leg annuity (PV01)."""
+        return self.fixed_leg.annuity(curve)
+
+    def dv01(self, curve: DiscountCurve, shift: float = 0.0001) -> float:
+        """Parallel DV01: PV change for a 1bp parallel shift."""
+        pv_base = self.pv(curve)
+        return self.pv(curve.bumped(shift)) - pv_base
+
+    def pv_ctx(self, ctx) -> float:
+        """PV using PricingContext (extracts discount curve)."""
+        curve = ctx.discount_curve
+        if curve is None:
+            ccy = getattr(self, '_currency', None)
+            if ccy and hasattr(ctx, 'discount_curves'):
+                curve = ctx.discount_curves.get(ccy)
+        if curve is None:
+            raise ValueError("No discount curve in context")
+        return self.pv(curve)
+
+    @classmethod
+    def from_convention(cls, conv: OISConvention, start: date, end: date,
+                        fixed_rate: float, notional: float = 1_000_000.0) -> OISSwap:
+        """Create OISSwap from convention object."""
+        return conv.create_swap(start, end, fixed_rate, notional)
+
+
+def bootstrap_ois(
+    reference_date: date,
+    ois_rates: list[tuple[date, float]],
+    day_count: DayCountConvention = DayCountConvention.ACT_360,
+    fixed_frequency: Frequency = Frequency.ANNUAL,
+    interpolation: InterpolationMethod = InterpolationMethod.LOG_LINEAR,
+    calendar: Calendar | None = None,
+    convention: BusinessDayConvention = BusinessDayConvention.MODIFIED_FOLLOWING,
+) -> DiscountCurve:
+    """
+    Bootstrap an OIS (risk-free discount) curve from OIS par rates.
+
+    Uses the telescoping property for efficient stripping:
+        PV_float = df(start) - df(end)
+        PV_fixed = par_rate * sum(yf_i * df_i)
+
+    At par: df(start) - df(end) = par_rate * sum(yf_i * df_i)
+
+    Args:
+        reference_date: Curve reference date.
+        ois_rates: List of (maturity_date, par_rate) sorted by maturity.
+        day_count: Day count for both legs.
+        fixed_frequency: Fixed leg payment frequency.
+        interpolation: Interpolation method.
+
+    Returns:
+        A DiscountCurve (the OIS/risk-free curve).
+    """
+    for i in range(1, len(ois_rates)):
+        if ois_rates[i][0] <= ois_rates[i - 1][0]:
+            raise ValueError("ois_rates must be sorted by maturity")
+
+    pillar_dates: list[date] = []
+    pillar_dfs: list[float] = []
+
+    for mat, par_rate in ois_rates:
+        fixed_sched = generate_schedule(
+            reference_date, mat, fixed_frequency,
+            calendar, convention, StubType.SHORT_FRONT, True,
+        )
+
+        def objective(df_guess: float, _mat=mat, _par=par_rate,
+                      _sched=fixed_sched) -> float:
+            trial_dates = pillar_dates + [_mat]
+            trial_dfs = pillar_dfs + [df_guess]
+            trial_curve = DiscountCurve(
+                reference_date, trial_dates, trial_dfs,
+                day_count=DayCountConvention.ACT_365_FIXED,
+                interpolation=interpolation,
+            )
+
+            # Telescoping: PV_float = df(ref) - df(mat)
+            pv_float = trial_curve.df(reference_date) - trial_curve.df(_mat)
+
+            # PV_fixed = par * sum(yf_i * df_i)
+            pv_fixed = 0.0
+            for i in range(1, len(_sched)):
+                yf = year_fraction(_sched[i - 1], _sched[i], day_count)
+                pv_fixed += _par * yf * trial_curve.df(_sched[i])
+
+            return pv_fixed - pv_float
+
+        df_solved = brentq(objective, 1e-6, 3.0)  # wider bracket: handles negative rates
+        pillar_dates.append(mat)
+        pillar_dfs.append(df_solved)
+
+    curve = DiscountCurve(
+        reference_date, pillar_dates, pillar_dfs,
+        day_count=DayCountConvention.ACT_365_FIXED,
+        interpolation=interpolation,
+    )
+
+    # Provenance: per-OIS-swap round-trip residuals (pv_fixed - pv_float ≈ 0 by
+    # construction), discounted on the curve itself (single-curve OIS).
+    quotes: list[str] = []
+    residuals: list[float] = []
+    for mat, par_rate in ois_rates:
+        fixed_sched = generate_schedule(
+            reference_date, mat, fixed_frequency,
+            calendar, convention, StubType.SHORT_FRONT, True,
+        )
+        pv_float = curve.df(reference_date) - curve.df(mat)  # telescoping
+        pv_fixed = sum(
+            par_rate * year_fraction(fixed_sched[i - 1], fixed_sched[i], day_count)
+            * curve.df(fixed_sched[i])
+            for i in range(1, len(fixed_sched))
+        )
+        quotes.append(f"ois_{mat.isoformat()}")
+        residuals.append(pv_fixed - pv_float)
+    curve.calibration_result = curve_calibration_record(
+        model_class="ois_curve_bootstrap",
+        parameters=pillar_parameters(pillar_dates, pillar_dfs, label="df"),
+        residuals=residuals,
+        quotes_fitted=quotes,
+        algorithm="brentq-sequential",
+        tolerance=1e-6,
+        iterations=len(pillar_dates),
+        converged=True,
+        optimiser_extra={"interpolation": str(interpolation.value)},
+        diagnostics_extra={"n_ois_swaps": len(ois_rates)},
+    )
+    return curve
+
+from pricebook.core.serialisable import serialisable as _serialisable
+_serialisable("ois", ["start", "end", "fixed_rate", "notional", "fixed_frequency", "day_count"])(OISSwap)

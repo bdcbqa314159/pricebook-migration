@@ -1,0 +1,515 @@
+"""Tests for approximation theory: Chebyshev, Padé, Richardson, B-splines."""
+
+import math
+
+import numpy as np
+import pytest
+
+from pricebook.core.approximation import (
+    Approximant,
+    BarycentricInterpolant,
+    ChebyshevInterpolant,
+    PadeApproximant,
+    RichardsonTable,
+    HermiteInterpolant,
+    RemezApproximant,
+    barycentric_interpolate,
+    bspline_basis,
+    chebyshev_interpolate,
+    chebyshev_nodes,
+    hermite_interpolate,
+    pade_approximant,
+    remez,
+    richardson_table,
+)
+from pricebook.numerical._spectral import chebyshev_expand
+
+
+# ---- Chebyshev interpolation ----
+
+class TestChebyshevInterpolation:
+    def test_polynomial_exact(self):
+        """Chebyshev of degree n reproduces polynomials of degree ≤ n exactly."""
+        f = lambda x: x**3 - 2*x + 1
+        interp = chebyshev_interpolate(f, -1, 1, n=5)
+        x_test = np.linspace(-1, 1, 50)
+        np.testing.assert_allclose(interp.evaluate(x_test), f(x_test), atol=1e-10)
+
+    def test_exp_accurate(self):
+        """exp(x) on [-1,1] with n=20 should be accurate to ~1e-12."""
+        interp = chebyshev_interpolate(np.exp, -1, 1, n=20)
+        x_test = np.linspace(-0.9, 0.9, 100)
+        err = np.max(np.abs(interp.evaluate(x_test) - np.exp(x_test)))
+        assert err < 1e-10
+
+    # Removed test_arbitrary_interval (P12): it interpolated a non-smooth kink
+    # payoff with abs=0.5 — Chebyshev has Gibbs oscillation there, so it
+    # "passed" for the wrong reason and the half-unit tolerance hid everything.
+    # Legitimate interpolation accuracy is now covered by the polynomial-
+    # exactness property (reproduce at nodes + off-node) in
+    # test_approximation_properties.py.
+
+    def test_convergence_diagnostic(self):
+        interp = chebyshev_interpolate(np.exp, -1, 1, n=20)
+        # Last coefficients should be tiny for smooth functions
+        assert interp.max_coeff_magnitude() < 1e-8
+
+    # Removed test_scalar_evaluation (P12): symmetric sin evaluated at the
+    # midpoint π/2 — the exact mirror-bug anti-pattern. Scalar evaluation and
+    # off-centre correctness are now covered by TestEvaluateReturnContract and
+    # the asymmetric off-centre property (test_approximation_properties.py).
+
+    def test_degree_zero_constant(self):
+        """n=0 yields a constant interpolant (no ZeroDivisionError)."""
+        interp = chebyshev_interpolate(lambda x: 7.0, 0, 2, n=0)
+        assert interp.evaluate(0.0) == pytest.approx(7.0)
+        assert interp.evaluate(2.0) == pytest.approx(7.0)
+
+    def test_degenerate_interval_raises(self):
+        with pytest.raises(ValueError, match="degenerate"):
+            chebyshev_interpolate(np.exp, 1.0, 1.0, n=10)
+
+    def test_evaluate_clamps_out_of_domain(self):
+        """Out-of-[a,b] queries clamp to the boundary value (no extrapolation),
+        and the clamp is idempotent: eval(b + k) == eval(b) exactly."""
+        interp = chebyshev_interpolate(np.exp, 0.0, 1.0, n=16)
+        assert float(np.atleast_1d(interp.evaluate(5.0))[0]) == float(
+            np.atleast_1d(interp.evaluate(1.0))[0]
+        )
+        assert float(np.atleast_1d(interp.evaluate(-5.0))[0]) == float(
+            np.atleast_1d(interp.evaluate(0.0))[0]
+        )
+
+
+# ---- Barycentric Lagrange interpolation ----
+
+class TestBarycentricInterpolation:
+    def test_reproduces_at_arbitrary_nodes(self):
+        """Interpolant passes through every (node, value) pair exactly."""
+        nodes = [0.0, 0.4, 0.9, 1.5, 2.3, 3.0]  # arbitrary, non-Chebyshev
+        f = lambda x: x**5 - 2 * x**3 + x - 1  # noqa: E731
+        interp = barycentric_interpolate(nodes, [f(x) for x in nodes])
+        for x in nodes:
+            assert interp.evaluate(x) == pytest.approx(f(x), abs=1e-10)
+
+    def test_polynomial_exactness_off_node(self):
+        """Degree-≤n polynomial reproduced everywhere, not just at nodes."""
+        nodes = np.array([0.0, 0.4, 0.9, 1.5, 2.3, 3.0])
+        f = lambda x: x**5 - 2 * x**3 + x - 1  # noqa: E731
+        interp = barycentric_interpolate(nodes, f(nodes))
+        xt = np.linspace(0, 3, 50)
+        assert np.max(np.abs(interp.evaluate(xt) - f(xt))) < 1e-10
+
+    def test_agrees_with_chebyshev_on_chebyshev_nodes(self):
+        """On Lobatto nodes, barycentric == chebyshev_interpolate (composition)."""
+        a, b, n = 0.3, 2.1, 16
+        cn = chebyshev_nodes(n, a, b)
+        bary = barycentric_interpolate(cn, np.exp(cn))
+        cheb = chebyshev_interpolate(np.exp, a, b, n)
+        xt = np.linspace(a, b, 40)
+        np.testing.assert_allclose(bary.evaluate(xt), cheb.evaluate(xt), atol=1e-12)
+
+    def test_scalar_returns_float(self):
+        interp = barycentric_interpolate([0.0, 1.0, 2.0], [1.0, 2.0, 5.0])
+        assert isinstance(interp.evaluate(1.5), float)
+        arr = interp.evaluate(np.array([0.5, 1.5]))
+        assert isinstance(arr, np.ndarray) and arr.shape == (2,)
+
+    def test_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="equal length"):
+            barycentric_interpolate([0.0, 1.0, 2.0], [1.0, 2.0])
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="at least one node"):
+            barycentric_interpolate([], [])
+
+    def test_duplicate_nodes_raise(self):
+        with pytest.raises(ValueError, match="distinct"):
+            barycentric_interpolate([0.0, 1.0, 1.0, 2.0], [1.0, 2.0, 3.0, 4.0])
+
+
+# ---- Remez minimax polynomial ----
+
+class TestRemez:
+    def test_beats_chebyshev_interpolation(self):
+        """Minimax error must be ≤ Chebyshev interpolation error (it's optimal)."""
+        for fn, a, b in [(np.exp, -1, 1), (np.sin, 0, 3), (lambda x: 1 / (1 + x * x), -1, 1)]:
+            for deg in (4, 8):
+                r = remez(fn, a, b, deg)
+                ci = chebyshev_interpolate(fn, a, b, deg)
+                g = np.linspace(a, b, 2000)
+                fg = fn(g)
+                rem_err = np.max(np.abs(r.evaluate(g) - fg))
+                cheb_err = np.max(np.abs(ci.evaluate(g) - fg))
+                assert rem_err <= cheb_err * (1 + 1e-9)
+
+    def test_error_field_matches_actual_max_error(self):
+        """The reported equioscillation level matches the true max error to
+        dense-grid resolution (error is a grid estimate, not exact-continuous)."""
+        r = remez(np.exp, -1, 1, 6)
+        g = np.linspace(-1, 1, 5000)
+        actual = np.max(np.abs(r.evaluate(g) - np.exp(g)))
+        assert r.error == pytest.approx(actual, rel=1e-3)
+
+    def test_polynomial_exact(self):
+        """A degree-≤n polynomial is reproduced with ~zero minimax error."""
+        f = lambda x: 2 * x**3 - x + 0.5  # noqa: E731
+        r = remez(f, -1, 2, 3)
+        assert r.error < 1e-9
+        g = np.linspace(-1, 2, 100)
+        assert np.max(np.abs(r.evaluate(g) - f(g))) < 1e-8
+
+    def test_degree_zero_is_midrange(self):
+        """Best constant for monotonic exp on [0,1] is (min+max)/2 = (1+e)/2."""
+        r = remez(np.exp, 0, 1, 0)
+        assert r.evaluate(0.5) == pytest.approx((1 + np.e) / 2, rel=1e-6)
+
+    def test_scalar_returns_float(self):
+        assert isinstance(remez(np.exp, 0, 1, 5).evaluate(0.5), float)
+
+    def test_degenerate_interval_raises(self):
+        with pytest.raises(ValueError, match="degenerate"):
+            remez(np.exp, 1.0, 1.0, 4)
+
+    def test_negative_degree_raises(self):
+        with pytest.raises(ValueError, match="degree must be"):
+            remez(np.exp, 0, 1, -1)
+
+    def test_non_convergence_raises(self):
+        """Fail loud, never return a silent partial result."""
+        with pytest.raises(ValueError, match="did not converge"):
+            remez(np.exp, 0, 1, 4, max_iter=0)
+
+
+# ---- Hermite interpolation ----
+
+class TestHermiteInterpolation:
+    def test_matches_values_and_derivatives(self):
+        """p(x_i) == value_i exactly; p'(x_i) == derivative_i (via central diff)."""
+        nodes = np.array([0.0, 0.7, 1.6, 2.5])
+        interp = hermite_interpolate(nodes, np.exp(nodes), np.exp(nodes))
+        for x in nodes:
+            assert interp.evaluate(x) == pytest.approx(np.exp(x), abs=1e-12)
+        h = 1e-6
+        for x in nodes:
+            deriv = (interp.evaluate(x + h) - interp.evaluate(x - h)) / (2 * h)
+            assert deriv == pytest.approx(np.exp(x), abs=1e-5)
+
+    def test_derivative_conditions_independent_of_values(self):
+        """Zero values but ±1 slopes ⇒ p'(0)=1, p'(1)=-1 (a cubic)."""
+        interp = hermite_interpolate([0.0, 1.0], [0.0, 0.0], [1.0, -1.0])
+        h = 1e-6
+        assert (interp.evaluate(h) - interp.evaluate(-h)) / (2 * h) == pytest.approx(1.0, abs=1e-5)
+        assert (interp.evaluate(1 + h) - interp.evaluate(1 - h)) / (2 * h) == pytest.approx(-1.0, abs=1e-5)
+
+    def test_polynomial_exact_degree_2n_minus_1(self):
+        """Degree-≤(2n-1) polynomial reproduced exactly (n=3 ⇒ degree 5)."""
+        f = lambda x: 3 * x**5 - 2 * x**3 + x - 4  # noqa: E731
+        fp = lambda x: 15 * x**4 - 6 * x**2 + 1  # noqa: E731
+        nodes = np.array([-1.0, 0.3, 1.2])
+        interp = hermite_interpolate(nodes, f(nodes), fp(nodes))
+        g = np.linspace(-1, 1.2, 100)
+        assert np.max(np.abs(interp.evaluate(g) - f(g))) < 1e-10
+
+    def test_scalar_returns_float(self):
+        interp = hermite_interpolate([0.0, 1.0], [1.0, 2.0], [0.5, 0.5])
+        assert isinstance(interp.evaluate(0.5), float)
+        arr = interp.evaluate(np.array([0.2, 0.8]))
+        assert isinstance(arr, np.ndarray) and arr.shape == (2,)
+
+    def test_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="equal length"):
+            hermite_interpolate([0.0, 1.0], [1.0, 2.0], [0.5])
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="at least one node"):
+            hermite_interpolate([], [], [])
+
+    def test_duplicate_nodes_raise(self):
+        with pytest.raises(ValueError, match="distinct"):
+            hermite_interpolate([0.0, 1.0, 1.0], [1.0, 2.0, 3.0], [0.0, 0.0, 0.0])
+
+
+# ---- Padé approximant ----
+
+class TestPadeApproximant:
+    def test_exp_pade_22(self):
+        """Padé [2/2] of exp(x) should be accurate near x=0."""
+        # Taylor of exp: 1, 1, 1/2, 1/6, 1/24
+        coeffs = [1, 1, 0.5, 1/6, 1/24]
+        pade = pade_approximant(coeffs, L=2, M=2)
+        # exp(0.5) ≈ 1.6487
+        assert pade.evaluate(0.5) == pytest.approx(math.exp(0.5), rel=1e-3)
+
+    def test_pade_10_is_taylor(self):
+        """Padé [L/0] = Taylor polynomial of degree L."""
+        coeffs = [1, 1, 0.5, 1/6]
+        pade = pade_approximant(coeffs, L=3, M=0)
+        x = 0.3
+        taylor = 1 + x + 0.5*x**2 + x**3/6
+        assert pade.evaluate(x) == pytest.approx(taylor, rel=1e-10)
+
+    def test_pade_reproduces_rational(self):
+        """Padé [1/1] of 1/(1+x): Taylor = 1, -1, 1, -1 → exact."""
+        coeffs = [1, -1, 1, -1]
+        pade = pade_approximant(coeffs, L=1, M=1)
+        # Should be exactly 1/(1+x)
+        assert pade.evaluate(0.5) == pytest.approx(1 / 1.5, rel=1e-8)
+        assert pade.evaluate(2.0) == pytest.approx(1 / 3.0, rel=1e-8)
+
+    def test_singular_denominator_raises(self):
+        """A singular denominator system must error, not silently truncate."""
+        # c = [1, 0, 0, 0, 0] makes the [2/2] denominator system singular.
+        with pytest.raises(ValueError, match="singular or"):
+            pade_approximant([1, 0, 0, 0, 0], L=2, M=2)
+
+    def test_near_singular_threshold(self):
+        """Singular raises; a small perturbation that is well-conditioned must
+        succeed — pins the guard direction (not over-eager)."""
+        with pytest.raises(ValueError, match="singular or"):
+            pade_approximant([1, 0, 0, 0, 0], L=2, M=2)
+        pade = pade_approximant([1, 0.0, 0.5, 0.1, 0.2], L=2, M=2)  # well-conditioned
+        assert pade.denominator[0] == 1.0
+        assert np.all(np.isfinite(pade.numerator))
+
+    def test_exp_golden_coefficients(self):
+        """Pin the recovered coefficients of exp's diagonal Padés against the
+        textbook closed forms — a value check (test_exp_pade_22) can't catch a
+        wrong-but-close coefficient set."""
+        # [1/1] of exp = (1 + x/2) / (1 - x/2)
+        p11 = pade_approximant([1, 1, 0.5], L=1, M=1)
+        np.testing.assert_allclose(p11.numerator, [1.0, 0.5], atol=1e-12)
+        np.testing.assert_allclose(p11.denominator, [1.0, -0.5], atol=1e-12)
+        # [2/2] of exp = (1 + x/2 + x²/12) / (1 - x/2 + x²/12)
+        p22 = pade_approximant([1, 1, 0.5, 1 / 6, 1 / 24], L=2, M=2)
+        np.testing.assert_allclose(p22.numerator, [1.0, 0.5, 1 / 12], atol=1e-12)
+        np.testing.assert_allclose(p22.denominator, [1.0, -0.5, 1 / 12], atol=1e-12)
+
+
+# ---- Richardson table ----
+
+class TestRichardsonTable:
+    def test_exact_extrapolation(self):
+        """O(h²) estimates should give exact result after one Richardson step."""
+        # f(h) = 1 + h², f(h/2) = 1 + h²/4 → Richardson = 1
+        values = [1 + 0.1**2, 1 + 0.05**2, 1 + 0.025**2]
+        result = richardson_table(values, order=2)
+        assert result.best_estimate == pytest.approx(1.0, abs=1e-8)
+
+    def test_table_shape(self):
+        values = [1.1, 1.025, 1.006]
+        result = richardson_table(values)
+        assert result.table.shape == (3, 3)
+        assert len(result.estimates) == 3
+
+    def test_diagonal_improves(self):
+        """Each diagonal entry should be closer to the true value."""
+        true = 1.0
+        values = [true + 0.1, true + 0.025, true + 0.00625]
+        result = richardson_table(values, order=2)
+        errors = [abs(e - true) for e in result.estimates]
+        # Each should be better (or at least not much worse)
+        assert errors[-1] < errors[0]
+
+    def test_single_value(self):
+        result = richardson_table([1.5])
+        assert result.best_estimate == pytest.approx(1.5)
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            richardson_table([])
+
+    def test_order_drives_cancellation_both_directions(self):
+        """The `order` must actually drive the cancellation — checked in BOTH
+        directions. A pure h^3 error series is exact with order=3 but the
+        order=2 ladder {2,4,6} can never hit h^3, so it must NOT be exact.
+        A no-op or wrong-exponent bug fails the negative direction."""
+        h = 0.2
+        values = [1 + (h / 2**i) ** 3 for i in range(4)]  # pure h^3 error
+        assert abs(richardson_table(values, order=3).best_estimate - 1) < 1e-12
+        assert abs(richardson_table(values, order=2).best_estimate - 1) > 1e-7
+
+    def test_explicit_orders_for_non_geometric_series(self):
+        """Explicit `orders` eliminates a non-arithmetic exponent set (h^1, h^2,
+        h^4) that NO single geometric base can — the opt-in's whole purpose."""
+        A = 2.0
+        c = [0.7, -0.4, 0.9]
+        hs = [0.2 / 2**i for i in range(4)]
+        values = [A + c[0] * h + c[1] * h**2 + c[2] * h**4 for h in hs]
+        assert abs(richardson_table(values, orders=[1, 2, 4]).best_estimate - A) < 1e-12
+        # The best geometric base can't do it (exponents 1,2,4 aren't p,2p,3p).
+        assert abs(richardson_table(values, order=1).best_estimate - A) > 1e-7
+
+    def test_orders_too_short_raises(self):
+        with pytest.raises(ValueError, match="orders needs"):
+            richardson_table([1.0, 1.1, 1.2, 1.3], orders=[2])  # need 3
+
+    def test_best_estimate_is_table_corner(self):
+        values = [1.1, 1.025, 1.006, 1.0015]
+        r = richardson_table(values, order=2)
+        assert r.best_estimate == float(r.table[-1, -1])
+        assert r.best_estimate == r.estimates[-1]
+
+
+# ---- B-spline basis ----
+
+class TestBSplineBasis:
+    def test_degree_zero(self):
+        """Degree 0: piecewise constant, 1 in the interval."""
+        knots = [0, 1, 2, 3, 4]
+        assert bspline_basis(0.5, knots, 0, 0) == 1.0
+        assert bspline_basis(1.5, knots, 0, 0) == 0.0
+        assert bspline_basis(1.5, knots, 0, 1) == 1.0
+
+    def test_partition_of_unity(self):
+        """B-splines of degree d on a uniform knot vector sum to 1."""
+        knots = [0, 0, 0, 0, 1, 2, 3, 4, 4, 4, 4]
+        degree = 3
+        x = 2.5
+        total = sum(bspline_basis(x, knots, degree, i) for i in range(len(knots) - degree - 1))
+        assert total == pytest.approx(1.0, abs=1e-10)
+
+    def test_non_negative(self):
+        """B-splines are non-negative."""
+        knots = [0, 0, 0, 1, 2, 3, 3, 3]
+        degree = 2
+        for x in np.linspace(0.01, 2.99, 50):
+            for i in range(len(knots) - degree - 1):
+                assert bspline_basis(x, knots, degree, i) >= -1e-15
+
+    def test_linear_spline(self):
+        """Degree 1 B-spline is a hat function."""
+        knots = [0, 1, 2, 3]
+        # B_{1,1}(x): peaks at x=2, zero at x=1 and x=3
+        assert bspline_basis(2.0, knots, 1, 1) == pytest.approx(1.0)
+        assert bspline_basis(1.0, knots, 1, 1) == pytest.approx(0.0)
+        assert bspline_basis(1.5, knots, 1, 1) == pytest.approx(0.5)
+
+    def test_index_out_of_range_raises(self):
+        """Negative or too-large i must error, not wrap to a wrong value."""
+        knots = [0, 1, 2, 3, 4]
+        with pytest.raises(IndexError):
+            bspline_basis(1.5, knots, 0, -1)
+        with pytest.raises(IndexError):
+            bspline_basis(1.5, knots, 0, 99)
+
+    def test_partition_of_unity_swept(self):
+        """Partition of unity must hold across the WHOLE interior span, not at
+        one cherry-picked point (the single-point test could pass by luck)."""
+        knots = [0, 0, 0, 0, 1, 2, 3, 4, 4, 4, 4]
+        degree = 3
+        nbasis = len(knots) - degree - 1
+        for x in np.linspace(0.0, 4.0, 101)[:-1]:  # exclude the right endpoint
+            total = sum(bspline_basis(x, knots, degree, i) for i in range(nbasis))
+            assert total == pytest.approx(1.0, abs=1e-12)
+
+    def test_right_endpoint_gap_is_documented(self):
+        """KNOWN convention: B_{i,0} uses the half-open [t[i], t[i+1]), so at
+        x == t[-1] every basis is 0 and partition-of-unity drops to 0. Pinned
+        so a future change to the convention is visible, not silent."""
+        knots = [0, 0, 0, 0, 1, 2, 3, 4, 4, 4, 4]
+        degree = 3
+        nbasis = len(knots) - degree - 1
+        total = sum(bspline_basis(4.0, knots, degree, i) for i in range(nbasis))
+        assert total == 0.0  # not 1.0 — the right-endpoint half-open gap
+
+    def test_cubic_matches_scipy_oracle(self):
+        """Cubic Cox-de Boor pinned against scipy.interpolate as an independent
+        oracle (no elegant closed form for cubic basis at off-knot points)."""
+        from scipy.interpolate import BSpline
+
+        knots = [0, 0, 0, 0, 1, 2, 3, 4, 4, 4, 4]
+        degree = 3
+        for i in (2, 3, 4):
+            local = np.asarray(knots[i : i + degree + 2], dtype=float)
+            ref = BSpline.basis_element(local, extrapolate=False)
+            for x in (1.3, 2.6, 3.4):
+                expected = float(ref(x))
+                expected = 0.0 if np.isnan(expected) else expected
+                assert bspline_basis(x, knots, degree, i) == pytest.approx(
+                    expected, abs=1e-12
+                )
+
+
+# ---- Evaluate return-type contract (P5) ----
+
+class TestEvaluateReturnContract:
+    """Scalar in → Python float out; array in → np.ndarray out. Pins the
+    contract so the np.atleast_1d(...) workarounds are unnecessary and a future
+    return-shape change is loud."""
+
+    def test_chebyshev_scalar_returns_float(self):
+        interp = chebyshev_interpolate(np.exp, 0.0, 1.0, n=12)
+        assert isinstance(interp.evaluate(0.5), float)
+        arr = interp.evaluate(np.array([0.2, 0.4, 0.6]))
+        assert isinstance(arr, np.ndarray) and arr.shape == (3,)
+
+    def test_pade_scalar_returns_float(self):
+        pade = pade_approximant([1, 1, 0.5, 1 / 6, 1 / 24], L=2, M=2)
+        assert isinstance(pade.evaluate(0.3), float)
+        arr = pade.evaluate(np.array([0.1, 0.2]))
+        assert isinstance(arr, np.ndarray) and arr.shape == (2,)
+
+    def test_spectral_result_scalar_returns_float(self):
+        res = chebyshev_expand(np.exp, 12, 0.0, 1.0)
+        assert isinstance(res.evaluate(0.5), float)
+        arr = res.evaluate(np.array([0.2, 0.4]))
+        assert isinstance(arr, np.ndarray) and arr.shape == (2,)
+
+
+class TestChebyshevCoreSpectralAgree:
+    """The two entry points — core chebyshev_interpolate(f, a, b, n) and spectral
+    chebyshev_expand(f, n, a, b) — share one kernel and MUST agree. Pins the
+    transposed signatures against each other so an argument-order regression in
+    either is loud."""
+
+    def test_coefficients_and_values_match(self):
+        a, b, n = 0.3, 2.1, 18
+        ci = chebyshev_interpolate(np.exp, a, b, n)
+        se = chebyshev_expand(np.exp, n, a, b)
+        np.testing.assert_allclose(ci.coefficients, se.coefficients, atol=1e-12)
+        for q in (0.5, 1.1, 1.9):
+            assert ci.evaluate(q) == pytest.approx(se.evaluate(q), abs=1e-12)
+
+
+# ---- Approximant protocol conformance (P6) ----
+
+class TestApproximantConformance:
+    """One conformance test over every result type: the evaluable ones satisfy
+    the Approximant protocol with a uniform return contract, Richardson does
+    not, and every result serialises its full field set (no lossy to_dict)."""
+
+    @staticmethod
+    def _evaluables():
+        return [
+            chebyshev_interpolate(np.exp, 0.0, 1.0, 12),
+            barycentric_interpolate([0.0, 0.5, 1.0, 1.7], [1.0, 1.6, 2.7, 5.5]),
+            remez(np.exp, 0.0, 1.0, 6),
+            hermite_interpolate([0.0, 1.0, 2.0], [1.0, 2.7, 7.4], [1.0, 2.7, 7.4]),
+            pade_approximant([1, 1, 0.5, 1 / 6, 1 / 24], L=2, M=2),
+            chebyshev_expand(np.exp, 12, 0.0, 1.0),
+        ]
+
+    def test_evaluable_types_satisfy_protocol(self):
+        for obj in self._evaluables():
+            assert isinstance(obj, Approximant)
+
+    def test_richardson_is_not_an_approximant(self):
+        assert not isinstance(richardson_table([1.1, 1.025, 1.006], order=2), Approximant)
+
+    def test_evaluate_return_contract_uniform(self):
+        for obj in self._evaluables():
+            assert isinstance(obj.evaluate(0.5), float)
+            arr = obj.evaluate(np.array([0.3, 0.6]))
+            assert isinstance(arr, np.ndarray) and arr.shape == (2,)
+
+    def test_to_dict_is_full_state(self):
+        results = self._evaluables() + [richardson_table([1.1, 1.025], order=2)]
+        for obj in results:
+            d = obj.to_dict()
+            assert isinstance(d, dict)
+            assert set(d) == set(vars(obj))  # full field set, not a lossy subset
+        # Specifically: SpectralResult.to_dict is no longer lossy (had dropped
+        # nodes/values/coefficients before P6).
+        spec = chebyshev_expand(np.exp, 12, 0.0, 1.0).to_dict()
+        assert {"nodes", "values", "coefficients"} <= set(spec)
