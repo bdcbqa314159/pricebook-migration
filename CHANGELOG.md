@@ -11,6 +11,46 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.112.0] - 2026-10-25
+
+**Repo restart (artifact 23) — the tree is restructured and the test gate is closed.** No pricing
+logic changed; no oracle expected value moved. Drawdown unchanged at 22 / 793.
+
+### Changed — layout
+- `src/pricebook_ng/` → **`src/pricebook/`**, `tests_ng/` → **`tests/`**, `redesign/` → **`docs/`**,
+  `documents/` → **`notes/`**, `python/` → **`quarry/`**; `parked/` and `ng_parked/` fold under
+  `quarry/parked/`. 644 path references rewritten across 113 files. The `_ng` suffix was migration
+  scar tissue; 59 modules is the cheapest the rename will ever be.
+- Root cleared of quarry-era docs. `REFERENCES.md` and `RELEASE_NOTES.md` do not cross (§7 — the
+  frozen quarry release log); their `.gitignore` allowlist entries are removed so a stray file of
+  either name is not silently tracked again.
+- `quarry/parked/ng/` is **deliberately untouched** — its package genuinely is `pricebook_ng` and it
+  is a frozen record (728 references left as written). `CHANGELOG` history is likewise not rewritten:
+  a changelog records what was true when written. A mapping note stands at the top instead.
+
+### Fixed — the merge gate was checking 48% of the suite
+- **CI ran `verify.py tests --layer 0`: 177 of 366 tests.** 189 tests — every oracle from slices
+  20–25 included — were gated by nothing for six slices, while each report read "gates green".
+  `ci.yml` even carried the comment *"Bump --layer as topics add tiers"*; it was never bumped.
+- **`--layer` is now optional and discovers `tests/L*`.** The bug was the hardcoded ceiling, not the
+  value `0`: a filter with no floor (CLAUDE.md §6, second clause), the same shape as audit #10.
+  `--layer N` is kept for the per-tier local run §7b describes. CI now collects 366 across 6 dirs.
+
+### Fixed — stale index
+- `docs/README.md` claimed drawdown `13 / 768` (tracker: `22 / 793`) and called artifact 22
+  "awaiting adversarial review" when it has been **ratified rev 3** since 2026-07-29.
+
+### Added
+- `docs/23_repo_restart.md` — the ratified artifact, 8 criteria, all pass.
+- `OPEN.md` **NG-DEFER-PROV** — 17 unresolvable `quarry:` provenance paths, none caused by this
+  restart; `verify.py provenance` never checked that a path resolves.
+
+### History
+- Re-founded at `v0.111.0`. Versions 0.0.1–0.111.0 (151 PRs, each with its own `RED → GREEN` commit
+  sequence) live in **bdcbqa314159/pricebook-legacy**, archived read-only, reachable on
+  `refs/pull/<N>/head`.
+
+
 ## [0.111.0] - 2026-10-24
 
 **Swaption SABR smile, read-not-solved (T1 slice 25) — and the vol capabilities take the forward as
