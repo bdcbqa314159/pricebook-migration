@@ -425,6 +425,18 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   §2 says so too: `xva.py`'s 9 importers consume the MC exposure surface, not `cva`.
   Evidence: `spec_xva_B7_slice1.md` + `CHANGELOG` v0.123.0.
 
+- **B7 slice-2 netting retire read (0 TICKS — PARTIAL; 26 / 793 unchanged, as the spec expected):**
+  `risk/xva.py`'s netting surface crosses as L5 `netted_exposure_profile(swaps, model)` + L6
+  `shell.book_cva(book, model, entity)`. **`cva` is unchanged** — netting was a new profile builder,
+  which is what slice 1's split was for, and a signature test now asserts it so the claim cannot
+  lapse. `risk/xva.py`'s residual is **unchanged at 12 of 13 functions**: the quarry's netting lives
+  inside its MC exposure path (`simulate_exposures`), which travels with the general-exposure slice.
+  **Analytic netting is constrained by construction:** the swaption proxy only has a netted exposure
+  when the set aggregates to a swap-equivalent (one index / currency / schedule / day-count family),
+  so a heterogeneous set is a `PricingFailure` naming **which** two indices and where it defers —
+  `deferred→` MC exposure, never a silent mis-net.
+  Evidence: `spec_xva_slice2_netting.md` + `CHANGELOG` v0.124.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
