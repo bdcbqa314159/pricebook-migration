@@ -191,12 +191,16 @@ def test_a_node_quoted_in_prices_fits_the_same_params_as_one_quoted_in_vols() ->
     """Price-quoted nodes invert through slice 24's law-generic `implied_vol` BEFORE the fit."""
     from pricebook.models.implied_vol import implied_vol
     from pricebook.models.vol_law import Lognormal
+    from pricebook.products.option import OptionType
 
     curves = _curves()
     key, smile = _node_quote(EXPIRIES[0], TENORS[0], curves, Frequency.SEMI_ANNUAL)
     law, t, s = Lognormal(), TM.year_fraction(smile.expiry), smile.forward
-    prices = tuple(law.price(s, k, t, v) for k, v in zip(smile.strikes, smile.vols))
+    # quote the node in CALL premiums, then recover the vols the way a price-quoted cube must
+    prices = tuple(law.price(s, k, v, t, OptionType.CALL) for k, v in zip(smile.strikes, smile.vols))
     back = tuple(implied_vol(law, p, s, k, t) for p, k in zip(prices, smile.strikes))
+    for recovered, quoted in zip(back, smile.vols):  # the inversion itself, before the fit
+        assert abs(recovered - quoted) < 1e-9
 
     from_vols = build_swaption_vol_cube(_spec(curves, ((key, smile),)))
     from_prices = build_swaption_vol_cube(
