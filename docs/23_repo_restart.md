@@ -1,6 +1,6 @@
-# Artifact #23 — repo restart (ratified)
+# Artifact #23 — repo restart (current)
 
-**Status:** ratified 2026-10-25 (Bernardo)
+**Status:** current — executed 2026-10-25, all 8 criteria pass
 **Governing purpose:** Re-found the repository so the remaining 97% of the migration lands in a
 clean structure, and repair the merge gate so it asserts what the law already claims.
 **Inherits:** THE BAR (`CLAUDE.md` §1 layering · §4 green-oracle · §5 debt · §7b provenance)
@@ -114,11 +114,11 @@ pricing logic changes, no design decision is reopened, no number moves.
 | A1 | pass | 2157 / 2157 accounted · **0 unexplained** | 2035 byte-identical · 111 differ only by the path rewrites (each re-derived from the legacy blob by applying the substitutions) · 8 deliberate edits · 3 dropped. 0 missing, 0 extra. |
 | A2 | pass | **366 passed, 0 failed** vs baseline 366 | `pytest tests -q`, 1.24s |
 | A3 | pass | `verify.py tests` collects **366 across 6 layer dirs** (was 177 across 1) | **189 tests newly gated.** Fixed by making `--layer` optional and discovering `tests/L*` — a hardcoded ceiling is the bug, not the value `0` |
-| A4 | todo | local gates: acyclic · layers · fields · debt · version · provenance · ruff **all PASS** | the both-OS half runs on the new repo's first CI run (Phase 1) |
+| A4 | pass | **ubuntu-latest: success · windows-latest: success** | run on `944063f`; deps matched the CI pins (numpy 2.4.3 / scipy 1.17.1) locally beforehand, so the first push was predictable |
 | A5 | pass | **0 broken by the rewrite** (17 of 45 already dangling before it) | pre-existing drift logged as `OPEN.md` **NG-DEFER-PROV**, not fixed here — three distinct failure modes make it its own slice |
-| A6 | todo | | Phase 1, after the rename + archive |
+| A6 | pass | **4 / 4** refs resolve from the archived repo | `refs/pull/{1,75,150,151}/head` → `57fde59f` `0418d137` `bcd4eeda` `49dd2921`; 150's tip is the slice-25 RED→GREEN sequence |
 | A7 | pass | **0 refs** to `pricebook_ng` / `tests_ng` on the live surface | 644 refs rewritten across 113 files; `quarry/parked/ng/`'s 728 deliberately untouched (its package genuinely is `pricebook_ng`) |
-| A8 | partial | (a) regenerated protocol: **0 dangling paths** · (b) pending | `thread.md` is copied in Phase 2 by design, so (b) completes post-swap |
+| A8 | pass | (a) **0 dangling** in the regenerated protocol, re-run post-swap · (b) `thread.md` **byte-identical** to the legacy copy, entry `0001` intact | |
 
 ## Carry-list corrections found during Phase 0
 
@@ -137,3 +137,15 @@ Measured against `git archive`, not assumed:
   working tool to save three files is false economy. Its outputs stay gitignored, so nothing
   regenerates into the tree.
 - **Reference count: 2157 tracked files** at `97d22ed2`. A1 compares against exactly this set.
+
+## Outcome
+
+Executed in three phases, nothing outward-facing until A1/A2/A5/A7 were green. `main` on the new
+repo is protected identically to the legacy repo (linear history, both OS checks required,
+squash-only, no force-push). The legacy repo is archived read-only with all 151 PRs' commit
+sequences reachable on `refs/pull/<N>/head`.
+
+**One finding deferred, not silenced:** `OPEN.md` **NG-DEFER-PROV** — 17 of 45 `quarry:` provenance
+paths do not resolve, *none* broken by this artifact's rewrite. `verify.py provenance` checks the
+four lines exist, never that the path resolves. Three distinct failure modes (parked-move,
+wrong-subdirectory-from-birth, file-exists-nowhere) make it its own slice with its own oracle.
