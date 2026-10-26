@@ -662,7 +662,10 @@ def calibrate(
         merged[CurveKey(CurveRole.DISCOUNT, spec.xccy.currency, spec.xccy.collateral)] = xccy_curve
         residuals.extend(xccy_residuals)
         converged = converged and all(abs(r) < spec.solve.tolerance for r in xccy_residuals)
-    snapshot = MarketSnapshot(spec.valuation_date, CurveSet(merged), scalars=dict(spec.fx))
+    # annotated because `Mapping` is invariant in its key type: a plain `dict(spec.fx)` is
+    # `dict[ScalarKey, float]` and will not widen to the snapshot's `ScalarKey | RecoveryKey`
+    scalars: dict[ScalarKey | RecoveryKey, float] = {k: v for k, v in spec.fx.items()}
+    snapshot = MarketSnapshot(spec.valuation_date, CurveSet(merged), scalars=scalars)
     return DiscountingModel(snapshot), CalibrationResult(
         tuple(residuals), converged=converged, jacobian=jacobian
     )

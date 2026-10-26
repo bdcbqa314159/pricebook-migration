@@ -11,6 +11,48 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.121.0] - 2026-10-26
+
+**B6 credit slice 4 — recovery becomes L1 market state; `rec01`.** Spec:
+`docs/handoffs/spec_credit_slice4_recovery.md` (Cowork, thread 0027). **430 tests** (was 421).
+Drawdown unchanged at 26 / 793 — a §3d-correcting refactor plus one capability, no tick expected.
+
+### Fixed — recovery had TWO homes, and they could silently disagree
+Slices 2–3 carried `recovery` on the L2 `CDS` **and** on the bootstrap spec. §3c places it at L1
+("risk bumps them"), and the two-home shape was a latent §3d divergence, not untidiness. **Measured:**
+with the curve bootstrapped at R=0.40 and the CDS marked at R=0.30, a **par** quote priced to
+**+96,431 on 10mm notional** (≈96bp) — silently, on a quote that had just calibrated to zero. The
+day-count divergence's twin, found by Cowork's review of the slice-3 report.
+
+- **`snapshot.scalars[RecoveryKey(entity)]` is now the single source**, read by the bootstrap and by
+  the mark. `RecoveryKey` is a **sibling** of `ScalarKey`, not a field on it — a new asset class adds
+  keys, not fields (§3c), mirroring `surfaces`' `SurfaceKey | SwaptionSurfaceKey`.
+- `CDS.recovery` and `CreditBootstrapSpec.recovery` are **removed**. The divergence is no longer
+  merely untested; it cannot be written down.
+- An absent recovery is a **failure value**, never an assumed 0.40 — that convention is precisely
+  why a silent default would be dangerous: it would look right in every standard case.
+- The validation moved with the field: recovery is checked at the snapshot boundary.
+
+### Added — `rec01`, and it is an ordinary snapshot bump
+`RecoveryBump` + `risk.rec01`, through the same `Priceable` + `central_diff` path as `cs01`. This is
+only possible *because* recovery is now L1: as a product field it would have required a second,
+instrument-mutating bump mechanism beside the snapshot one and a type-switch to choose between them
+— which is what §1 forbids. One home, one mechanism.
+
+### Oracles
+**Byte-identical refactor guard** — full-precision `repr` of 5 CDS PVs, the seasoned pv+accrued,
+`cs01`, all 5 CS01 buckets and all 6 bootstrapped survivals, captured before the move and compared
+after: **not one ULP moved**. **Analytic ∂PV/∂R vs FD** — the protection leg is linear in `(1−R)` and
+the premium leg has no R, so `∂PV/∂R = −protection/(1−R)` exactly. **rec01 is independent of the
+spread** — a structural fact, not a number: if it varied with the spread, R would be leaking into the
+annuity. **One-source par-to-zero** at R ∈ {0.20, 0.40, 0.60}: every quoted pillar marks to zero at
+every recovery, because one R feeds both stages.
+
+### Also
+`CreditBootstrapSpec` is now `(entity, currency, quotes, market, solve)` — it takes the snapshot
+rather than a bare discount curve, since that is where both the curve and the recovery live.
+`TEST_FLOOR` 421 → 430.
+
 ## [0.120.0] - 2026-10-26
 
 **B6 credit slice 3 — CS01 and bucketed CS01 at L5. `credit/credit_risk.py` RETIRED: drawdown
