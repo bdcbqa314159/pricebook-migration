@@ -35,8 +35,8 @@ from pricebook.market.vol_surface import Surface, SwaptionSurfaceKey
 from pricebook.models.black_model import BlackModel
 from pricebook.products.swap import FixedLeg, FloatLeg, VanillaSwap
 from pricebook.risk.exposure import netted_exposure_profile, swaption_exposure_profile
-from pricebook.risk.xva import book_cva, cva, swap_cva
-from pricebook.shell.portfolio import Book, Trade
+from pricebook.risk.xva import cva, swap_cva
+from pricebook.shell.portfolio import Book, Trade, book_cva
 
 Y = TenorUnit.YEAR
 DC365 = DayCountConvention.ACT_365_FIXED
@@ -99,7 +99,7 @@ def test_a_book_of_one_trade_nets_to_the_standalone_profile_byte_identically() -
     swap = _swap(0.035)
     model = _model(0.02)
     standalone = swaption_exposure_profile(swap, model)
-    netted = netted_exposure_profile(_book(swap), model)
+    netted = netted_exposure_profile([swap], model)
     assert not isinstance(standalone, PricingFailure) and not isinstance(netted, PricingFailure)
     assert netted == standalone                      # byte-identical, not merely close
 
@@ -172,7 +172,7 @@ def test_zero_hazard_gives_zero_netted_cva() -> None:
 
 def test_the_netted_profile_has_one_point_per_schedule_interval() -> None:
     model = _model(0.02)
-    profile = netted_exposure_profile(_book(_swap(0.035), _swap(0.030)), model)
+    profile = netted_exposure_profile([_swap(0.035), _swap(0.030)], model)
     assert not isinstance(profile, PricingFailure), profile
     assert len(profile) == 5
     assert [d for d, _ in profile] == sorted(d for d, _ in profile)
@@ -200,9 +200,11 @@ def test_a_heterogeneous_netting_set_is_a_FAILURE_not_a_silent_mis_net() -> None
     """The analytic swaption proxy only has a netted exposure when the set aggregates to a
     swap-equivalent. Two different indices do not — so this must fail loudly and defer to MC, rather
     than nets two incompatible positions and return a plausible number."""
-    out = netted_exposure_profile(_book(_swap(0.035), _swap(0.035, index=OTHER)), _model(0.02))
+    out = netted_exposure_profile([_swap(0.035), _swap(0.035, index=OTHER)], _model(0.02))
     assert isinstance(out, PricingFailure), out
-    assert "index" in out.reason.lower() or "heterogene" in out.reason.lower()
+    # the reason must name WHICH two, so the caller can act on it rather than just retry
+    assert "EURIBOR_3M" in out.reason and "EURIBOR_6M" in out.reason, out.reason
+    assert "MC" in out.reason                      # and where it defers to
 
 
 def test_an_empty_netting_set_has_no_exposure_and_no_charge() -> None:
@@ -221,5 +223,5 @@ def test_a_set_with_a_non_swap_product_is_a_failure() -> None:
     from pricebook.foundation import Money
 
     cds = CDS(CP, PremiumLeg(sched, DayCountConvention.ACT_360, 0.01), Money(NOTIONAL, CCY))
-    out = netted_exposure_profile(Book((Trade((cds,), VAL),), name="mixed"), _model(0.02))
+    out = book_cva(Book((Trade((cds,), VAL),), name="mixed"), _model(0.02), CP)
     assert isinstance(out, PricingFailure), out

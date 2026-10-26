@@ -23,6 +23,7 @@ Provenance:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date
 
 from pricebook.engine.registry import dispatch as price
@@ -77,3 +78,77 @@ def swaption_exposure_profile(
             return PricingFailure(f"exposure at {expiry.isoformat()}: {priced.reason}")
         out.append((expiry, priced.pv.amount))
     return tuple(out)
+
+
+def netted_exposure_profile(
+    swaps: Sequence[VanillaSwap], model: CalibratedModel
+) -> ExposureProfile | PricingFailure:
+    """`EE(tᵢ)` for a **netting set** — the trades' positions netted first, then the exposure taken
+    on the net.
+
+    That order is the whole content of netting: `EE(max(Σ MtM, 0)) ≤ Σ EE(max(MtM, 0))`, because
+    exposure is a convex function of the position and offsetting trades cancel *before* the floor at
+    zero rather than after. Taking exposures first and summing them would lose exactly the benefit
+    netting exists to capture.
+
+    **The analytic proxy constrains what can be netted, and the constraint fails as a value.** A
+    swaption-on-the-net only exists when the set aggregates to a swap-equivalent — one index, one
+    currency, one schedule family — so a heterogeneous set returns a `PricingFailure` and
+    `deferred→` the MC-exposure slice. Netting a general multi-asset set is MC's job by
+    construction; the alternative would be silently netting incompatible positions into a plausible
+    number, which is the worst outcome available here.
+
+    **`cva` is untouched by this.** Netting is a new *profile builder*, not a change to the integral
+    — which is what slice 1's split was for, and `test_cva_signature_is_UNCHANGED_by_netting`
+    asserts it so the claim cannot quietly lapse.
+
+    **It takes the swaps, not a `Book`.** A `Book` is L6 (`shell/`) and risk is L5, so depending on
+    it here is an upward import — the acyclic gate named it the moment it was tried
+    (`risk(L5) imports shell(L6)`), and `shell/portfolio.py` already imports `risk`, so it was a real
+    cycle rather than a stylistic point. The *netting set* is a portfolio concept and stays at L6;
+    what L5 needs is the positions. `shell.book_cva` is the L6 composition that unwraps one."""
+    if not swaps:
+        return ()
+    net = _net_swap(list(swaps))
+    if isinstance(net, PricingFailure):
+        return net
+    return swaption_exposure_profile(net, model)
+
+
+def _net_swap(swaps: list[VanillaSwap]) -> VanillaSwap | PricingFailure:
+    """Aggregate a swap-equivalent set into one net swap: notionals add (signed), and the
+    notional-weighted fixed rate preserves the net fixed leg's PV.
+
+    The set must share index, currency, day counts and schedule — those are what make a single net
+    swap *the same position* rather than an approximation of it. Anything else is a `PricingFailure`:
+    the netting is exact here or it is MC's."""
+    first = swaps[0]
+    for other in swaps[1:]:
+        if other.float_leg.index != first.float_leg.index:
+            return PricingFailure(
+                f"netting set spans two indices ({first.float_leg.index.id.name} and "
+                f"{other.float_leg.index.id.name}); the analytic net needs one — deferred to MC"
+            )
+        if other.currency != first.currency:
+            return PricingFailure("netting set spans two currencies; deferred to MC exposure")
+        if other.fixed_leg.schedule != first.fixed_leg.schedule:
+            return PricingFailure("netting set spans two schedules; deferred to MC exposure")
+        if (other.fixed_leg.day_count, other.float_leg.day_count) != (
+            first.fixed_leg.day_count, first.float_leg.day_count
+        ):
+            return PricingFailure("netting set spans two day-count conventions; deferred to MC")
+    net_notional = sum(s.notional for s in swaps)
+    if abs(net_notional) < 1e-12:
+        # a perfectly offsetting set: flat position, no exposure, and no fixed rate to define
+        return VanillaSwap(
+            0.0, first.currency,
+            FixedLeg(first.fixed_leg.schedule, first.fixed_leg.day_count, first.fixed_leg.rate),
+            FloatLeg(first.float_leg.schedule, first.float_leg.day_count, first.float_leg.index),
+        )
+    # the notional-weighted rate is the one whose single fixed leg pays what the set's legs pay
+    rate = sum(s.notional * s.fixed_leg.rate for s in swaps) / net_notional
+    return VanillaSwap(
+        net_notional, first.currency,
+        FixedLeg(first.fixed_leg.schedule, first.fixed_leg.day_count, rate),
+        FloatLeg(first.float_leg.schedule, first.float_leg.day_count, first.float_leg.index),
+    )
