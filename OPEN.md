@@ -36,6 +36,28 @@ but not a *tier* emptying while another grows (L0 losing 20 tests while L4 gains
 **Re-open trigger:** the first tier rebalance, or a slice that moves tests between layers — at which
 point the floor becomes a per-tier mapping.
 
+## Credit (B6) — named deferrals (2026-10-26, slices 1-2)
+
+**NG-DEFER-CREDITISDA — the credit oracle has no ISDA cross-check.** Ratified by Cowork (thread 0023):
+the green-oracle gate is **met at rung 1 without it** — the flat-hazard analytic integral
+`(1−R)·λ/(r+λ)·(1−e^{−(r+λ)T})`, the continuous par spread → `λ(1−R)`, `risky_annuity == rpv01` at
+λ=0, and the off-par discrete closed-form CDS mark are all genuine second methods, not
+self-consistency. Inventing an ISDA number would be a **golden file dressed as rung 2**, which is
+worse than a stated gap. **Re-open trigger:** a citable ISDA Standard CDS Model worked example
+(upfront/spread pair for a given hazard and recovery) — the same bar the FX asymmetric-ACI rule
+waits on.
+
+**NG-DEFER-DF-CONTINUOUS — `CurveHandle.df` takes a `date`, so time-integrals have a day floor.**
+`protection_leg` discretises `∫ df·(−dQ)` on a calendar grid and discounts each step at its
+midpoint. Because dates are day-valued, a one-day step's midpoint floors to that step's start, so
+`df` is read half a day early at every step — a systematic bias that refinement accumulates rather
+than removes. Measured against the analytic integral: n=1 → 1.6e-5, **n=12 → 2.1e-6**, n=52 → 4.9e-6,
+n=365 → 5.1e-6. Monthly is therefore the accuracy optimum, not merely the cheap choice, and
+`IntegrationConfig` has **no default** so the grid is always stated. **Re-open trigger:** the first
+consumer that needs sub-day integration accuracy (an intraday-settled credit product, or a
+short-dated CDS where the half-day bias is material) — it would add a `df(t: float)` capability
+beside `df(date)`, which is a protocol widening and therefore a ruled decision, not a patch.
+
 ## The quarry no longer imports (found 2026-10-26, slice B audit)
 
 **NG-DEFER-QUARRYIMPORT — DISCHARGED 2026-10-26 (park-model slice).** The quarry imports: **792

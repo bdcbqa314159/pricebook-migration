@@ -11,6 +11,77 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.119.0] - 2026-10-26
+
+**B6 credit slice 2 — the CDS product (L2) and its engine mark (L4), plus the numerical config
+invariant 5 deferred to its first engine.** Spec: `docs/handoffs/spec_credit_slice2.md` (Cowork,
+thread 0023). **412 tests** (was 399). Drawdown unchanged at 25 / 793 — two partial crosses, below.
+
+### Added — L2 product, L4 mark
+- **`products/credit.py`** — `CDS` (4 fields) + `PremiumLeg` (schedule, day_count, spread), mirroring
+  `FixedLeg`. Pure data, no `pv()`. `notional` is **signed**: positive = bought protection.
+  Credit-event / restructuring / seniority richness is **deferred to its consumers** (§3c places it
+  at L2, §6b forbids building the convention surface before one needs it).
+- **`engine/credit.py`** — `PV = N·(protection_leg − spread·risky_annuity)`, composing **the same two
+  atoms the slice-1 bootstrap fitted with** (§3d). Invariant 6: only future premium periods are
+  discounted, the in-progress period is reported as `accrued` (negative — the buyer owes it) and
+  `clean = pv − accrued`.
+
+### Added — the numerical config (invariant 5's deferred type lands)
+- **`foundation/numerics.py`** — `IntegrationConfig(steps_per_year)`, **no default**. Invariant 5
+  records that the concrete type "lands with the first engine that reads it"; the CDS protection leg
+  is that engine. Only the `integration` family exists, because only it has a consumer: §3b names the
+  eventual `(monte_carlo, lattice, integration, solver)` decomposition and §6b forbids building the
+  other three — or an aggregate wrapping one of four — ahead of them.
+- **`price(instrument, model, numerics)`** — threaded through the registry, **optional at the
+  boundary and required by the pricers that read it**. A closed-form pricer keeps its two-argument
+  signature (the dispatcher inspects arity), while the CDS mark returns a `PricingFailure` when the
+  config is absent. Invariant 5 forbids a *hidden default*, not an optional parameter. All 8 existing
+  pricers are untouched.
+
+### Oracles — 13 new, led by the mandatory non-telescoping one
+**Off-par flat-hazard CDS mark against closed form.** A *par* CDS is worth zero, so a par-only oracle
+telescopes and a divergent annuity is invisible — the audit-#10 lesson. Off par, `PV ≠ 0` and the
+annuity carries full weight. The closed form is evaluated **independently of the engine's atoms**
+(straight `exp()` over the same contractual quarterly ACT/360 schedule), so it tests the engine's
+*composition* — log-linear df, log-linear Q, `Accrual`, the generated schedule — rather than
+restating it. Plus: every bootstrapped pillar marks to zero (the §3d identity) · the discrete par
+spread solved from the closed form prices to zero · the seasoned accrued/clean decomposition · a
+missing survival curve is a failure, not a risk-free mark · the grid is observably live.
+
+### Fixed — a §3d divergence in the new engine, caught by its own par-to-zero oracle
+The protection window's day count is the **time basis of the integration grid**, not an accrual
+convention, so it must be the survival curve's own measure — which is what the bootstrap integrates
+over. The first draft passed `cds.premium.day_count` (ACT/360 against the curve's ACT/365F), which
+changed the step count and made the bootstrap's own par CDS mark non-zero. Exactly the
+calibrate-one-way/price-another failure this slice's atom-sharing exists to prevent, found by the
+oracle rather than by review.
+
+### Changed — `SurvivalCurve`
+- `survival(d)` for a **past** date returns `1.0` rather than raising: the boundary condition
+  `Q(t)=1 for t≤0`. We are pricing a live entity, so by construction it did not default before today
+  — and a seasoned CDS needs it, since the in-progress period's accrual-on-default term reads
+  `Q(accrual_start)` with that start behind the valuation date. `hazard` still refuses a past date.
+- **`default_prob`** and **`conditional_survival`** land — two of the nine methods slice 1
+  forward-linked as needed-by-slice-2.
+
+### Added — `OPEN.md`, both ratified by Cowork
+`NG-DEFER-CREDITISDA` (no ISDA cross-check; the gate is met at rung 1 without it, and an invented
+number would be a golden file dressed as rung 2 — trigger: a citable ISDA worked example) ·
+`NG-DEFER-DF-CONTINUOUS` (`df` takes a `date`, so time-integrals carry a day-granularity floor;
+trigger: the first consumer needing sub-day accuracy, which is a protocol widening and so a ruled
+decision).
+
+### Retired: none — two partial crosses, honestly
+`credit/cds.py` (1035 lines, **20 production importers**): the three leg functions, the bootstrap and
+the pricing methods are superseded, but the quarry `CDS` carries **20 methods** and ng's product
+carries none by design — so quote-convention conversions, CS01/rec01/duration/convexity/theta,
+carry/roll-down, amortising notional, P&L attribution, forward CDS and `StandardCDS` are all
+forward-linked to named consumers. `core/survival_curve.py`'s residual shrinks from nine methods to
+**seven**. Neither bar is empty, so neither ticks.
+
+`TEST_FLOOR` 399 → 412.
+
 ## [0.118.0] - 2026-10-26
 
 **B6 credit opens — slice 1: the L0 identity, the L1 survival curve, the shared credit atoms, and the

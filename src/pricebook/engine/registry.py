@@ -14,6 +14,8 @@ Provenance:
 
 from __future__ import annotations
 
+import inspect
+
 from collections.abc import Callable
 from typing import Any
 
@@ -24,7 +26,7 @@ from pricebook.models.protocols import CalibratedModel
 # registry keys by that type, so dispatch is type-safe at the key even though the callable
 # signatures are heterogeneous. The model param is the `CalibratedModel` PROTOCOL, not a concrete
 # type — a pricer that needs a richer capability (e.g. `ImpliedVol`) validates it structurally.
-Pricer = Callable[[Any, CalibratedModel], "PricingResult | PricingFailure"]
+Pricer = Callable[..., "PricingResult | PricingFailure"]
 _PRICERS: dict[type, Pricer] = {}
 
 
@@ -38,9 +40,28 @@ def register(product_type: type) -> Callable[[Pricer], Pricer]:
     return _register
 
 
-def dispatch(instrument: object, model: CalibratedModel) -> PricingResult | PricingFailure:
-    """Price `instrument` by dispatching on its type to the registered pricer."""
+def dispatch(
+    instrument: object, model: CalibratedModel, numerics: object | None = None
+) -> PricingResult | PricingFailure:
+    """Price `instrument` by dispatching on its type to the registered pricer.
+
+    `numerics` carries the explicit reproducibility knobs (invariant 5). It is **optional at this
+    boundary and required by the pricers that read it**: a closed-form pricer has no knobs and must
+    not be made to accept one (§6b), while a pricer that integrates returns a `PricingFailure` when
+    it is absent — never a guessed grid. That is what invariant 5 forbids: a *hidden default*, not
+    an optional parameter. A pricer declares it needs numerics by accepting a third argument."""
     pricer = _PRICERS.get(type(instrument))
     if pricer is None:
         return PricingFailure(f"no pricer registered for {type(instrument).__name__}")
+    if _takes_numerics(pricer):
+        return pricer(instrument, model, numerics)
     return pricer(instrument, model)
+
+
+def _takes_numerics(pricer: Pricer) -> bool:
+    """Whether the pricer declares a third (numerics) parameter — so closed-form pricers keep
+    their two-argument signature and nothing is threaded where it has no meaning."""
+    try:
+        return len(inspect.signature(pricer).parameters) >= 3
+    except (TypeError, ValueError):
+        return False
