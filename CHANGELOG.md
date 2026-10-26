@@ -11,6 +11,58 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.123.0] - 2026-10-26
+
+**B7 opens — unilateral CVA of one swap, swaption-approximation exposure.** Spec:
+`docs/handoffs/spec_xva_B7_slice1.md` (Cowork, thread 0032). **454 tests** (was 441). Drawdown
+unchanged at 26 / 793 — the spec expected 0 ticks for the opener and said not to manufacture one.
+
+### Added — the split that keeps one CVA definition
+- **`risk/exposure.py`** — `swaption_exposure_profile(swap, model)` returns `((date, EE), ...)`. The
+  standard physical-exposure result: the expected positive exposure of a swap at `tᵢ` **is** a
+  physical swaption expiring `tᵢ` on the remaining leg, so `EE` is the pricer the swaption cluster
+  already oracled, composed rather than re-derived.
+- **`risk/xva.py`** — `cva(profile, survival, recovery) = LGD·Σ EE(tᵢ)·(Q(tᵢ₋₁) − Q(tᵢ))`.
+- **The exposure method is pluggable; the CVA atom is not** (§3d). `cva` takes a *profile*, not a
+  trade, so the MC exposure engine (a later slice) feeds the identical definition — the two cannot
+  become two CVAs that happen to agree. The vol-law and forward-threading precedent, applied before
+  it can bite rather than after.
+- **Direction is derived, never a knob.** `VanillaSwap`'s PV is the fixed-payer's, so a positive
+  notional is a payer and its exposure is a payer swaption (CALL); negative is a receiver (PUT). The
+  sub-swap uses `abs(notional)` so the option PV *is* the exposure.
+
+### Oracles — 13 new
+**The composition, against an independent re-summation** over the same schedule from direct pricer
+calls and `exp()` survivals — testing that the atom composes what it claims rather than restating its
+sum. **Limits:** `hazard → 0 ⇒ CVA → 0` (the limit that catches a default leg wired to the survival
+*level* instead of its *increment* — the classic error, since levels do not vanish there); monotone in
+hazard; **exactly proportional to `(1−R)`**; zero for a swap with no remaining life. **Count:** one
+profile point per schedule interval, dates matching the schedule, and **the last point is exactly
+0.0** — a profile carrying full exposure to maturity would overstate every XVA built on it.
+**Bump-consistency as an XVA acceptance criterion** (doc 11's third face, per Cowork's ruling):
+recovery bumped at its snapshot home moves the charge by exactly the LGD ratio; the survival curve
+bumped at its home widens it.
+
+**Failure propagation is the sharp one here:** an exposure point that cannot be priced **propagates**
+rather than counting as zero exposure. A zero CVA is a *plausible* number — it reads as "this
+counterparty is riskless" — so a silently smaller charge is the worst available outcome.
+
+### Retired: none — honestly
+`risk/xva.py` is 783 lines with **9 production importers** and 13 functions; ng supersedes **1**
+(`cva`, and partially — the quarry's is MC-driven). Everything else is forward-linked: the exposure
+family + WWR → the **general-exposure (MC) slice** (which also crosses `models/mc_exposure.py` and is
+what will actually move B7's bar); `dva`/`bilateral_cva` → slice 3; `fva`/`mva`/`kva` → their own
+slices; `XVAResult` → the consolidated XVA report. The consumer-narrow steering rule from
+`CP_credit_vertical.md` §2 agrees: those 9 importers consume the MC exposure surface, not `cva`.
+
+### Noted — the provenance gate caught a guessed path
+I wrote `quarry: quarry/pricebook/risk/exposure.py` in the new module's header; no such file exists
+(the quarry's exposure lives in `models/mc_exposure.py` and inside `risk/xva.py`). `verify.py
+provenance` went RED immediately — the resolve-don't-just-exist face, earning its keep for the third
+time.
+
+`TEST_FLOOR` 441 → 454.
+
 ## [0.122.0] - 2026-10-26
 
 **Vanilla credit COMPLETE — jump-to-default, the `protection_leg` signature fix, and Cowork's

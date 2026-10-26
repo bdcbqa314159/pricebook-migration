@@ -406,6 +406,25 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   moved**. A re-layering that changed a number would have been a different change.
   Evidence: `spec_credit_slice4_recovery.md` + `CHANGELOG` v0.121.0.
 
+- **B7 slice-1 XVA retire read (0 TICKS — PARTIAL; 26 / 793 unchanged, as the spec expected):**
+  `quarry/pricebook/risk/xva.py` (783 lines, **9 production importers**, 13 functions + `XVAResult`)
+  crosses **partially** as ng `risk/xva.py` (`cva`, `swap_cva`) + `risk/exposure.py`
+  (`swaption_exposure_profile`). **Superseded: `cva` only** — and even that partially, since the
+  quarry's is MC-driven while ng's slice-1 exposure is the analytic swaption approximation; the two
+  compose the **same** ng atom once MC lands, which is the point of splitting profile from integral
+  (§3d). **Resident residual, each forward-linked:** `simulate_exposures` /
+  `expected_positive_exposure` / `expected_negative_exposure` / `expected_exposure` /
+  `simulate_wwr_exposures` → **the general-exposure (MC) slice**, which also crosses
+  `models/mc_exposure.py` (163 lines) and is the slice that will actually move this bar; `dva` /
+  `bilateral_cva` → **slice 3**; `fva` / `mva` / `kva` / `xva_spread_decomposition` /
+  `effective_discount_rate` → **their own slices**; `XVAResult` → the consolidated XVA report
+  (ng's `PricingResult` decomposition covers one trade, not an XVA family).
+  **No tick, and the spec said not to manufacture one:** ng supersedes 1 of 13 functions. B7's bar
+  moves on the **general-exposure slice**, not on this opener — the same shape as credit slice 1
+  (capability first, tick later), and the consumer-narrow steering rule from `CP_credit_vertical.md`
+  §2 says so too: `xva.py`'s 9 importers consume the MC exposure surface, not `cva`.
+  Evidence: `spec_xva_B7_slice1.md` + `CHANGELOG` v0.123.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
