@@ -24,13 +24,17 @@ analytic protection integral `(1−R)λ/(r+λ)(1−e^{−(r+λ)T})`; the continu
 was not designed in and turned out exact: **`risky_annuity` at λ=0 IS `rpv01`** to 1e-12 — §3d
 proving itself, since the credit annuity *is* the rates annuity when nothing defaults.
 
-**Finding O1 — the survival curve's own oracles are the thinnest in the vertical.** `L1` is rung-1
-on `Q(t)=exp(−λt)` but has no *interpolation* oracle: nothing checks log-linear Q against an
-independent value strictly between pillars on a **non-flat** curve. The flat case is degenerate
-(every interpolation scheme agrees), so a wrong interpolation would pass today and only surface as a
-mis-priced off-pillar CDS. **Not closed in this slice** — it needs a published piecewise-hazard
-reference value, which is the same bar `NG-DEFER-CREDITISDA` waits on; ledgered below rather than
-left as a note.
+**Finding O1 — WITHDRAWN, it was wrong.** The draft claimed the survival curve had no
+*interpolation* oracle. It has had one since slice 1:
+`test_piecewise_constant_hazard_between_pillars_is_log_linear_in_Q` builds a **non-flat** two-segment
+curve and checks an analytic intermediate `Q` strictly inside a segment, discriminating against the
+wrong (linear-in-Q) scheme by **1.66e-3** at a 1e-10 tolerance. The finding came from under-auditing
+the test file while writing this report; Cowork independently reached the same place from the other
+direction (ruling: closable analytically, no vendor needed). Recorded rather than quietly deleted —
+**an audit that invents findings costs the same credibility as one that misses them**, and the
+corrective is the same: read the file, not the memory of it. `NG-DEFER-SURVIVALINTERP` is NOT
+ledgered. Two modest strengthenings did land in v0.122.0 (the first segment, and a three-segment
+curve probed in its middle).
 
 **Three divergences this vertical caught, all by oracle rather than review** — worth recording
 because they are the same shape: ① the protection-window day count (ACT/360 vs the curve's ACT/365F)
@@ -98,10 +102,6 @@ green (suppressions − entries = 0).
 | `NG-DEFER-CUBEBETA` | one β for the whole swaption cube | first per-node-β consumer |
 | `NG-DEFER-CUBEORACLE` | cube round-trip is rung 4 | a citable vendor/textbook cube node |
 | `NG-WATCH-TIERFLOOR` | `TEST_FLOOR` is global, not per-tier | first tier rebalance |
-
-**New, to be ledgered on this checkpoint's ruling:** `NG-DEFER-SURVIVALINTERP` — finding O1, no
-independent oracle for log-linear Q strictly between pillars on a non-flat curve; trigger is the same
-published piecewise-hazard reference `NG-DEFER-CREDITISDA` waits on, so the two discharge together.
 
 **Smells, none load-bearing:** `risk/credit.py` and `engine/credit.py` and `products/credit.py` and
 `calibration/credit.py` are four files named `credit.py` in four packages — correct by layer, but

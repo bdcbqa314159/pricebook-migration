@@ -20,6 +20,7 @@ Provenance:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from pricebook.foundation import (
@@ -145,8 +146,27 @@ def risky_annuity(
     return total
 
 
+@dataclass(frozen=True)
+class ProtectionWindow:
+    """The period a credit protection leg covers — **two dates and nothing else.**
+
+    Deliberately not an `Accrual`: an `Accrual` carries a `day_count`, and for this leg a day count
+    is never an accrual convention, only the basis the integral is discretised on. Passing the
+    premium leg's ACT/360 where the survival curve's ACT/365F belonged changed the step count and
+    made the bootstrap's own par CDS mark non-zero (slice 2, divergence ①). The basis now comes from
+    the curve being integrated against (`SurvivalHandle.time_basis`), so the wrong call is
+    unwritable rather than merely tested against."""
+
+    start: date
+    end: date
+
+    def __post_init__(self) -> None:
+        if self.end <= self.start:
+            raise ValueError(f"a protection window must be ordered; got {self.start}..{self.end}")
+
+
 def protection_leg(
-    accrual: Accrual,
+    window: ProtectionWindow,
     recovery: float,
     discount: CurveHandle,
     survival: SurvivalHandle,
@@ -181,15 +201,16 @@ def protection_leg(
         raise ValueError(f"recovery must be in [0, 1); got {recovery}")
     if steps_per_year < 1:
         raise ValueError(f"steps_per_year must be positive; got {steps_per_year}")
-    years = accrual.year_fraction()
+    # the basis is the CURVE's, never the caller's (see ProtectionWindow)
+    years = Accrual(window.start, window.end, survival.time_basis).year_fraction()
     if years <= 0.0:
         return 0.0
     n = max(1, int(round(years * steps_per_year)))
-    span = (accrual.end - accrual.start).days
+    span = (window.end - window.start).days
     total = 0.0
     for j in range(n):
-        d0 = accrual.start + timedelta(days=int(span * j / n))
-        d1 = accrual.end if j == n - 1 else accrual.start + timedelta(days=int(span * (j + 1) / n))
+        d0 = window.start + timedelta(days=int(span * j / n))
+        d1 = window.end if j == n - 1 else window.start + timedelta(days=int(span * (j + 1) / n))
         if d1 <= d0:
             continue
         mid = _midpoint(d0, d1)

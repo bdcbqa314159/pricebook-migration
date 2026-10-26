@@ -107,12 +107,29 @@ def test_jtd_subtracts_the_premium_accrued_on_a_seasoned_cds() -> None:
     assert abs(got - expected) < 1e-6, (got, expected)
 
 
-def test_jtd_is_dominated_by_lgd_and_is_positive_for_bought_protection() -> None:
+def test_jtd_is_the_LGD_less_the_mark_so_an_in_the_money_cds_has_less_left_to_jump() -> None:
+    """The structural content of `JTD = (1−R)·N − PV`, stated as a relationship rather than a
+    magnitude band: a CDS already marked UP has *less* left to gain on default, and one marked down
+    has more. (My first attempt asserted `JTD < LGD`, which is false at a near-par spread: the PV is
+    then slightly negative, so JTD sits just above the LGD. The relationship holds at every spread;
+    the band did not.)"""
     market = _market(SurvivalCurve.flat_hazard(TM, 0.03, until=FAR))
-    got = jump_to_default(priceable(_cds(0.0180), DiscountingModel, NUMERICS), market, ACME)
-    assert not isinstance(got, PricingFailure)
-    assert got > 0.5 * (1.0 - RECOVERY) * NOTIONAL     # the LGD dominates the mark
-    assert got < (1.0 - RECOVERY) * NOTIONAL
+    lgd = (1.0 - RECOVERY) * NOTIONAL
+    rows = []
+    for spread in (0.0050, 0.0180, 0.0500):     # tight (ITM) → par → wide (OTM) for the buyer
+        cds = _cds(spread)
+        pv = price(cds, DiscountingModel(market), NUMERICS)
+        jtd = jump_to_default(priceable(cds, DiscountingModel, NUMERICS), market, ACME)
+        assert isinstance(pv, PricingResult) and not isinstance(jtd, PricingFailure)
+        rows.append((pv.pv.amount, jtd))
+        assert jtd > 0.0                                    # bought protection always gains
+        assert abs(jtd - (lgd - pv.pv.amount)) < 1e-6       # the identity itself
+
+    # monotone: as the mark falls across the three, the jump rises by exactly the same amount
+    (pv0, j0), (pv1, j1), (pv2, j2) = rows
+    assert pv0 > pv1 > pv2
+    assert j0 < j1 < j2
+    assert abs((j2 - j0) - (pv0 - pv2)) < 1e-6
 
 
 def test_jtd_flips_sign_with_the_notional() -> None:

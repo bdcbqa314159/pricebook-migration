@@ -98,3 +98,44 @@ def rec01(
     if isinstance(out, PricingFailure):
         return out
     return out * shift
+
+
+def jump_to_default(
+    p: Priceable, market: MarketSnapshot, entity: ReferenceEntity
+) -> float | PricingFailure:
+    """Jump-to-default: the PV change if `entity` defaults **right now**.
+
+    **Not a derivative** — default is a discrete event, so there is no bump and no finite difference.
+    For bought protection the holder receives `(1−R)·N`, stops paying premium, and owes the premium
+    accrued to today, so
+
+        JTD = (1−R)·N − accrued_owed − PV
+
+    and the `accrued` the mark already reports is the owed amount (negative for bought protection,
+    invariant 6), which is why it ADDS here. This is the defining credit risk: CS01 measures a
+    re-pricing, JTD measures the event itself, and a book can be CS01-flat while carrying a large
+    jump.
+
+    It is computed from the instrument's own notional-and-recovery state via one reprice, so it stays
+    instrument-type-blind like the rest of L5 — no `isinstance` (§1)."""
+    base = p.price_at(market)
+    if isinstance(base, PricingFailure):
+        return base
+    try:
+        recovery = market.recovery(entity)
+    except KeyError as exc:
+        return PricingFailure(str(exc))
+    notional = _notional_of(p)
+    if notional is None:
+        return PricingFailure("jump-to-default needs the instrument's notional")
+    accrued = 0.0 if base.accrued is None else base.accrued.amount
+    return (1.0 - recovery) * notional + accrued - base.pv.amount
+
+
+def _notional_of(p: Priceable) -> float | None:
+    """The signed notional the protection is written on. Reached through the `Priceable`'s closed-over
+    instrument rather than by type-switching on it: JTD is the one credit measure that is not a
+    reprice difference, so it needs the face amount, and this keeps that the only coupling."""
+    instrument = getattr(p, "instrument", None)
+    notional = getattr(instrument, "notional", None)
+    return getattr(notional, "amount", None)
