@@ -81,6 +81,22 @@ def test_sabr_calibration_round_trip_recovers_seed() -> None:
     assert all(abs(r) < 1e-8 for r in result.residuals)
 
 
+def test_the_fit_produces_one_residual_PER_QUOTED_STRIKE() -> None:
+    """Floor-on-population on the fit's own collection (CLAUDE.md §6 second clause; found as O1 in
+    `CP_swaption_cluster.md`). The acceptance gate takes `max(abs(r) for r in residuals)` — a short
+    residual list would pass the gate on a subset while the remaining strikes went unfitted. The
+    length is guaranteed today by `SmileQuote`'s own strikes/vols invariant, so this asserts a
+    property the type already holds: the cube took the same posture deliberately (the type makes a
+    drop unrepresentable AND the oracle asserts it), and this closes the one cluster gate that
+    relied on the invariant alone."""
+    model = _model()
+    smile = _seed_smile(model)
+    out = calibrate_sabr_smile(SabrCalibrationSpec(model, smile, BETA))
+    assert not isinstance(out, CalibrationFailure), out
+    _params, result = out
+    assert len(result.residuals) == len(smile.strikes) == 6
+
+
 def test_sabr_calibration_reprice_identity_through_model() -> None:
     # the fitted params, read back by SABRModel, reproduce the target smile at the SAME forward (§3d)
     model = _model()
