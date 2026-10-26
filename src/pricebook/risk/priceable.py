@@ -40,14 +40,22 @@ class _InstrumentPriceable:
 
     instrument: object
     model_ctor: Callable[[MarketSnapshot], CalibratedModel]
+    numerics: object | None = None
 
     def price_at(self, market: MarketSnapshot) -> PricingResult | PricingFailure:
-        return price(self.instrument, self.model_ctor(market))
+        return price(self.instrument, self.model_ctor(market), self.numerics)
 
 
 def priceable(
-    instrument: object, model_ctor: Callable[[MarketSnapshot], CalibratedModel]
+    instrument: object,
+    model_ctor: Callable[[MarketSnapshot], CalibratedModel],
+    numerics: object | None = None,
 ) -> Priceable:
     """A `Priceable` for `instrument` under the model built by `model_ctor` (e.g. `DiscountingModel`
-    for a swap, `BlackModel` for a caplet). Risk stays instrument-type-blind."""
-    return _InstrumentPriceable(instrument, model_ctor)
+    for a swap, `BlackModel` for a caplet). Risk stays instrument-type-blind.
+
+    `numerics` carries the same explicit reproducibility knobs the engine takes (invariant 5) — a
+    bumped reprice must use the SAME grid as the base, or the finite difference measures the grid
+    change as well as the market move. Optional here for the same reason as at the dispatcher: a
+    closed-form product has no knobs, and a product that needs them fails as a value without them."""
+    return _InstrumentPriceable(instrument, model_ctor, numerics)

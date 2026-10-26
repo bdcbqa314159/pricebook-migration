@@ -16,10 +16,12 @@ Provenance:
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import cast
 from typing import Protocol, runtime_checkable
 
 from pricebook.market.curve_set import CurveKey, CurveSet
 from pricebook.market.snapshot import MarketSnapshot
+from pricebook.market.survival_curve import SurvivalHandle
 from pricebook.market.vol_surface import SurfaceKey, flat_surface
 
 
@@ -72,3 +74,31 @@ class SurfaceBump:
         # flat vega only; SABR vega (bump α/ρ/ν) is a distinct greek, deferred to its consumer
         bumped = flat_surface(market.surfaces[self.key]).bumped(shift)
         return replace(market, surfaces={**market.surfaces, self.key: bumped})
+
+@dataclass(frozen=True)
+class SurvivalBump:
+    """Parallel-bumps the survival curve at `key` — every hazard segment moves by `shift`, which is
+    the credit-spread bump `cs01` reports. Bumping the HAZARD rather than Q is the slice-1 ruling:
+    Q has no units and a Q shift does not stay monotone, whereas a hazard shift does both."""
+
+    key: CurveKey
+
+    def apply(self, market: MarketSnapshot, shift: float) -> MarketSnapshot:
+        bumped = market.curves.curves[self.key].bumped(shift)
+        return replace(market, curves=market.curves.with_curve(self.key, bumped))
+
+
+@dataclass(frozen=True)
+class SurvivalPillarBump:
+    """Bumps ONE hazard segment of the survival curve at `key` — the credit key-rate bump. The
+    per-pillar bumps partition the curve's segments, so they sum to `SurvivalBump` up to
+    cross-convexity: that identity is the structural oracle for bucketed CS01, not a scalar match."""
+
+    key: CurveKey
+    pillar: int
+
+    def apply(self, market: MarketSnapshot, shift: float) -> MarketSnapshot:
+        # the key's SURVIVAL role is what guarantees the capability — the same narrowing
+        # `CurveSet.survival` performs, kept here rather than inspecting the object (§1)
+        curve = cast("SurvivalHandle", market.curves.curves[self.key])
+        return replace(market, curves=market.curves.with_curve(self.key, curve.bumped_at(self.pillar, shift)))
