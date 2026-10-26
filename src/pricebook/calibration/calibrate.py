@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from pricebook.foundation import (
     Accrual,
@@ -45,6 +45,7 @@ from pricebook.foundation import (
 )
 from pricebook.market.building_blocks import deposit_df, float_leg_pv, forward, rpv01
 from pricebook.market.curve import CurveHandle, DiscountCurve
+from pricebook.market.survival_curve import SurvivalHandle
 from pricebook.market.curve_set import CurveKey, CurveRole, CurveSet
 from pricebook.market.quotes import DepositQuote, FRAQuote, FutureQuote, ParSwapQuote
 from pricebook.market.snapshot import MarketSnapshot, ScalarKey
@@ -493,7 +494,7 @@ def _bootstrap(
 
 
 def _bootstrap_xccy(
-    spec: CalibrationSpec, curves: Mapping[CurveKey, CurveHandle]
+    spec: CalibrationSpec, curves: Mapping[CurveKey, CurveHandle | SurvivalHandle]
 ) -> tuple[DiscountCurve, tuple[float, ...]] | CalibrationFailure:
     """Sequential post-bootstrap of the foreign-collateral (xccy-basis) curve, on top of the
     already-built per-currency curves (dependency order: domestic OIS → foreign OIS → foreign-in-
@@ -504,7 +505,9 @@ def _bootstrap_xccy(
     xccy = spec.xccy
     assert xccy is not None  # guarded by the caller
     ois = _currency_curves(spec, xccy.currency).discount
-    foreign_ois = curves[CurveKey(CurveRole.DISCOUNT, xccy.currency)]
+    # the DISCOUNT role is what guarantees `df` — the same narrowing `CurveSet.discount`
+    # states, said here because the merged store is keyed across capabilities
+    foreign_ois = cast("CurveHandle", curves[CurveKey(CurveRole.DISCOUNT, xccy.currency)])
     time_measure = TimeMeasure(spec.valuation_date, ois.day_count)
     instruments = sorted(
         (XccyBasisInstrument(_xccy_swap(spec, ois, xccy.collateral, q)) for q in xccy.quotes),
@@ -637,7 +640,7 @@ def calibrate(
             "HAGAN_WEST requires the SIMULTANEOUS method (it is non-local; a SEQUENTIAL bootstrap "
             "cannot converge). Use SolveConfig(method=SIMULTANEOUS)."
         )
-    merged: dict[CurveKey, CurveHandle] = {}
+    merged: dict[CurveKey, CurveHandle | SurvivalHandle] = {}
     residuals: list[float] = []
     converged = True
     jacobian: Jacobian | None = None

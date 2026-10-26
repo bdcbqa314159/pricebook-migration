@@ -11,6 +11,65 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.120.0] - 2026-10-26
+
+**B6 credit slice 3 — CS01 and bucketed CS01 at L5. `credit/credit_risk.py` RETIRED: drawdown
+25 → 26 / 793, the credit bar moves.** Spec: `docs/handoffs/spec_credit_slice3_risk.md` (Cowork,
+thread 0025). **421 tests** (was 412).
+
+### Added — L5 credit risk, on the existing machinery
+- **`risk/credit.py`** — `cs01` (parallel hazard bump, reprice, ΔPV) and `bucketed_cs01` (one CS01
+  per hazard segment). Both go through `Priceable` + `central_diff` + a `Bump`, so there is **no
+  `isinstance` on the instrument** (§1): a CDS, a credit-linked note or a basket all route through
+  the same code because they all satisfy `Priceable`.
+- **`risk/bump.py`** — `SurvivalBump` (parallel) and `SurvivalPillarBump` (one segment). The bump is
+  on the **hazard**, not on Q: Q has no units and a Q shift does not stay monotone (slice-1 ruling).
+- **`SurvivalCurve.bumped_at(pillar, shift)`** — the single-segment bump slice 1 forward-linked as
+  `deferred→ L5 credit key-rate risk`. Only that segment's hazard moves, so every Q after it shifts
+  and every Q before it is untouched — which is what makes the per-pillar bumps a genuine partition.
+- **`priceable(instrument, model_ctor, numerics)`** — threads the integration config, because a
+  bumped reprice must use the **same grid** as the base or the finite difference measures the grid
+  change as well as the market move.
+
+### Oracles — 9 new
+**Analytic ∂PV/∂λ vs the bump-reprice (rung 1).** The flat-hazard CDS PV is closed form, so the
+derivative is differentiated analytically — `∂protection/∂λ = (1−R)[(1−e^{−kT})r/k² + λTe^{−kT}/k]`,
+`∂annuity/∂λ = −(1−e^{−kT})/k² + Te^{−kT}/k` — and compared with `cs01`. An FD-only test would only
+prove the bump is self-consistent with itself.
+
+**Structural (§6): bucketed CS01 is a decomposition, not a vector.** The per-pillar bumps partition
+the hazard segments, so they **sum to** the parallel CS01 (asserted to 1e-4 relative); **N segments →
+N buckets** (a count); and the buckets **beyond the instrument's maturity are zero** — risk smeared
+past maturity would be wrong and a parallel CS01 could not reveal it. Plus a sign/antisymmetry check
+(bought vs sold protection), and failure propagation for a missing curve or absent numerics.
+
+### Retired (+1) — and the reason is non-obvious
+`credit/credit_risk.py` (294 lines, 6 production importers). **Every one of those importers uses the
+module's *private* `_bump_survival_curve` / `_bump_survival_curve_at` helpers, not its public API** —
+and those two are exactly what ng supersedes (`SurvivalCurve.bumped`, `.bumped_at`). 4 of 6 members
+cross: `cs01` → ng `cs01`, `spread_dv01` → ng `bucketed_cs01` (which additionally asserts the
+decomposition identity the quarry never checked), and the two bump helpers.
+`deferred→`: `jump_to_default` → first JTD consumer; `CreditPosition`/`CreditBook` → the L6 credit
+book. Both are **capabilities, not products**, so neither blocks the tick (§4) — the same standard
+`options/sabr.py` and `options/swaption_vol.py` ticked under.
+
+### `credit/cds.py` re-assessed — still partial
+Three more of its 20 methods are superseded (`cs01`, `bucket_cs01`, and its `_bump_survival_curve`
+imports). Residual ~15: quote conversions, `rec01`, duration/convexity/theta, carry/roll-down,
+amortising notional, P&L attribution, forward CDS, `StandardCDS`. Bar not empty, so no tick.
+
+### NOT delivered — `rec01`, deliberately, with the reason
+The spec scoped `rec01` into this slice. It is **withheld pending a ruling**, because building it
+exposes drift: **CLAUDE.md §3c places recovery at L1** — *"Hazard/survival curve and recovery → L1
+(risk bumps them)"* — while slice 2 put `recovery` on the L2 product. `rec01` is the consumer that
+makes the difference real: as a product field it cannot be reached by a `Bump` (which perturbs the
+snapshot), so it would need a second, parallel bump mechanism at L5 — and `isinstance`-free structural
+dispatch is the thing §1 protects. The snapshot already has the right home (`scalars`, doc 19's
+closed shape, where FX spots live). Recorded in the thread for Cowork; everything not depending on
+that answer shipped.
+
+`TEST_FLOOR` 412 → 421.
+
 ## [0.119.0] - 2026-10-26
 
 **B6 credit slice 2 — the CDS product (L2) and its engine mark (L4), plus the numerical config

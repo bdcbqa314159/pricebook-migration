@@ -52,19 +52,22 @@ class CurveKey:
 class CurveSet:
     """One backing store of curves, reached through typed accessors (doc 19 §3)."""
 
-    curves: Mapping[CurveKey, CurveHandle]
+    # The store holds whatever capability the KEY'S ROLE implies: `df` curves under DISCOUNT and
+    # PROJECTION, a survival curve under SURVIVAL. Each accessor below states that narrowing once,
+    # which is why risk and the engines never inspect a curve to find out what it is (§1).
+    curves: Mapping[CurveKey, CurveHandle | SurvivalHandle]
 
     def discount(self, currency: Currency, collateral: Currency | None = None) -> CurveHandle:
         """The discount curve for `currency` under a `collateral` CSA. Own-currency collateral
         (`None` or `== currency`) normalizes to the domestic OIS curve; a foreign collateral
         selects its collateral-keyed curve (the xccy-basis curve, slice 6c)."""
         keyed = None if collateral in (None, currency) else collateral
-        return self.curves[CurveKey(CurveRole.DISCOUNT, currency, keyed)]
+        return cast("CurveHandle", self.curves[CurveKey(CurveRole.DISCOUNT, currency, keyed)])
 
     def projection(self, index: RateIndex) -> CurveHandle:
         """The forward-projection curve for `index`. Single-curve is the degenerate
         config: an OIS index's projection curve IS its discount curve (same object)."""
-        return self.curves[CurveKey(CurveRole.PROJECTION, index)]
+        return cast("CurveHandle", self.curves[CurveKey(CurveRole.PROJECTION, index)])
 
     def survival(self, entity: ReferenceEntity) -> SurvivalHandle:
         """The entity's survival curve. Distinct capability, distinct key (docs/19 §2) — it returns
@@ -78,7 +81,7 @@ class CurveSet:
             raise KeyError(f"no survival curve for {entity.name} in the curve set") from None
         return cast("SurvivalHandle", curve)
 
-    def with_curve(self, key: CurveKey, curve: CurveHandle) -> CurveSet:
+    def with_curve(self, key: CurveKey, curve: CurveHandle | SurvivalHandle) -> CurveSet:
         """A new `CurveSet` with the curve at `key` replaced (the base is never mutated —
         invariant 3). Risk (L5) uses this to build a bumped market."""
         return CurveSet({**self.curves, key: curve})

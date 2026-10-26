@@ -35,14 +35,24 @@ from pricebook.foundation.time_measure import TimeMeasure
 
 @runtime_checkable
 class SurvivalHandle(Protocol):
-    """The survival capability — `Q(d)` and the hazard at a date, plus a bumped copy for risk.
-    Depend on this, not the concrete curve (docs/19 §3); credit risk (L5) bumps through it."""
+    """The survival capability — `Q(d)` and the hazard at a date, a bumped copy for risk (parallel
+    or per-segment), and how many segments there are to bump.
+
+    Depend on this, not the concrete curve (docs/19 §3). `bumped_at` and `hazard_segments` are here
+    rather than probed off the concrete class because **bucketed credit risk needs to know the
+    bucket count**, and reaching for it with `getattr` would be exactly the "inspect the object"
+    pattern §1 forbids — the capability states it."""
 
     def survival(self, d: date) -> float: ...
 
     def hazard(self, d: date) -> float: ...
 
     def bumped(self, shift: float) -> SurvivalHandle: ...
+
+    def bumped_at(self, pillar: int, shift: float) -> SurvivalHandle: ...
+
+    @property
+    def hazard_segments(self) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -136,6 +146,32 @@ class SurvivalCurve:
             lam = -(math.log(self.survivals[i + 1]) - math.log(self.survivals[i])) / dt
             out.append(out[-1] * math.exp(-max(lam + shift, 0.0) * dt))
         return SurvivalCurve(self.measure, self.times, tuple(out))
+
+    def bumped_at(self, pillar: int, shift: float) -> SurvivalCurve:
+        """Shift the hazard of **one** segment — the key-rate credit bump. `pillar` indexes the
+        segment `[times[pillar], times[pillar+1]]`, i.e. the hazard the bootstrap fitted from the
+        `pillar`-th par quote.
+
+        Only that segment's hazard moves, so every Q **after** it shifts by the same factor while
+        every Q before it is untouched — which is what makes the per-pillar bumps a genuine
+        decomposition of the parallel one (each segment appears in exactly one bucket). Forward-linked
+        from slice 1 as `deferred→ L5 credit key-rate risk`; this is that landing."""
+        n = len(self.times) - 1
+        if not 0 <= pillar < n:
+            raise ValueError(f"pillar {pillar} is outside the curve's {n} hazard segments")
+        out = [1.0]
+        for i in range(n):
+            dt = self.times[i + 1] - self.times[i]
+            lam = -(math.log(self.survivals[i + 1]) - math.log(self.survivals[i])) / dt
+            moved = lam + shift if i == pillar else lam
+            out.append(out[-1] * math.exp(-max(moved, 0.0) * dt))
+        return SurvivalCurve(self.measure, self.times, tuple(out))
+
+    @property
+    def hazard_segments(self) -> int:
+        """How many piecewise-constant hazard segments the curve has — i.e. how many buckets a
+        key-rate credit risk decomposes into. `len(times) − 1`, since `times[0]` is the t=0 anchor."""
+        return len(self.times) - 1
 
     def with_pillar(self, t: float, q: float) -> SurvivalCurve:
         """A copy with one pillar appended — how the bootstrap grows the curve, never in place."""
