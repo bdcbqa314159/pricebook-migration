@@ -121,3 +121,12 @@ not a name that resolves (CLAUDE.md §6, the floor rule).
 named `pricebook` (`src/pricebook`, `quarry/pricebook`), so the walk runs in a subprocess rooted at
 `quarry/` **and** checks that the imported package's `__file__` lies under `quarry/` — measuring ng
 here would be a proxy that passes while the quarry is broken.
+
+**The gate asserts the quarry imports under its OWN declared dependencies.** CI installs
+`quarry/pyproject.toml`'s core set (`numpy`, `scipy`, `pandas`, `python-dateutil`) plus its `viz`
+extra (`matplotlib`, `seaborn`), all pinned — the same reproducibility contract numpy/scipy already
+sit under (§7bb). Measured need at import time: numpy 434 modules, scipy 146, dateutil 56, pandas 3,
+matplotlib 5, seaborn 3 (`viz/_seaborn.py` is an unguarded import). The `codec` extra
+(`zstandard`/`lz4`/`msgpack`) is deliberately **not** installed — its three importers guard with
+`try/except`, so they import without it. The first CI run of this gate failed exactly here: 151
+modules needed `dateutil`, which a local dev venv had incidentally and CI did not.
