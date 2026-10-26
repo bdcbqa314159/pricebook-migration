@@ -12,7 +12,7 @@ IMM (3rd Wednesday) and CDS (20th of Mar/Jun/Sep/Dec) roll dates are new here �
 neither existed in the quarry; futures and credit both need them.
 
 Provenance:
-  quarry: quarry/parked/topic-00-foundation/schedule.py
+  quarry: quarry/pricebook/core/schedule.py
   source: ISDA 2006 §4.10 (EOM, period end dates); CME IMM; ISDA CDS roll (20th)
   oracle: EOM anchoring, four stubs, adjusted≠unadjusted, published IMM/CDS tables
   slice:  schedules (Topic 0 S3)

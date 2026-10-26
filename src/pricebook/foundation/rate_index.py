@@ -11,7 +11,7 @@ family (no `fields-exempt`). It satisfies the `Underlying` protocol (`name`,
 (and forward/backward). Registry by explicit construction — no import-time JSON reload.
 
 Provenance:
-  quarry: quarry/parked/topic-00-foundation/rate_index.py
+  quarry: quarry/pricebook/core/rate_index.py
   source: ISDA 2006/2021; RFR compounding (ARRC/ISDA); IBOR fallbacks; gate audit F2/F3
   oracle: SOFR-on-SIFMA ≠ a same-currency index on another calendar; compounded RFR;
           lookback ≠ observation-shift; forward ≠ backward; fallback = base + spread

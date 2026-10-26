@@ -14,9 +14,44 @@
 
 ---
 
+## Carried from the swaption-cluster checkpoint ruling (2026-10-26)
+
+`docs/handoffs/rulings_CP_swaption_cluster.md` §3 — named deferrals and watch-items, so they are not
+silent. None is debt-for-wrongness; each is deferred *scope* with a trigger (§5).
+
+**NG-DEFER-CUBEBETA — the swaption cube fits ONE β for the whole cube.** β is an explicit input
+(audit F8, invariant 5) but a single scalar; desks commonly fit β per expiry/tenor, or calibrate it
+rather than fixing it. Nothing is wrong today — β is stated, carried untouched into every node's
+`SabrParams`, and oracle 5 asserts it. **Re-open trigger:** the first consumer that needs a per-node
+β (a cube quoted with a β term structure), or a calibration that wants β solved rather than fixed.
+
+**NG-DEFER-CUBEORACLE — the cube's round-trip oracle is self-consistency (rung 4), not a published
+number.** Oracle 3 recovers synthetic SABR params; it is non-vacuous only because oracle 1 supplies
+the node-count floor. A vendor or textbook swaption-cube node would raise this to rung 2.
+**Re-open trigger:** a citable swaption-cube reference value (vendor cube node, or a published Hagan
+table at swaption maturities) — the same green-oracle bar the FX asymmetric-ACI rule waits on.
+
+**NG-WATCH-TIERFLOOR — `TEST_FLOOR` is one global count, not per-tier.** It catches total shrinkage
+but not a *tier* emptying while another grows (L0 losing 20 tests while L4 gains 20 would pass).
+**Re-open trigger:** the first tier rebalance, or a slice that moves tests between layers — at which
+point the floor becomes a per-tier mapping.
+
 ## The quarry no longer imports (found 2026-10-26, slice B audit)
 
-**NG-DEFER-QUARRYIMPORT — `import pricebook.*` from `quarry/` raises `ModuleNotFoundError`.**
+**NG-DEFER-QUARRYIMPORT — DISCHARGED 2026-10-26 (park-model slice).** The quarry imports: **792
+modules, 0 failing** (was 318 / 265). Fixed by ruling `docs/handoffs/rulings_quarry_park_model.md`
+(option A): **a park is a tracker/MANIFEST state, not a physical move** — the 19 physically parked
+modules are restored to their original paths, CLAUDE.md §4 / doc 13 §7 / §7c amended, and
+`verify.py quarry` now walks the tree and floors the importable count (`QUARRY_IMPORT_FLOOR = 792`),
+RED on any drop. Proven to bite three ways: re-parking one module (`core/day_count.py`) drops the
+count to 318 and fails — the v0.74.0 breakage, reproduced and caught; a floor one above the true
+count fails; and the gate asserts it measured the quarry's `pricebook`, not ng's.
+**Why the first prescribed fix was insufficient** (recorded, since the scope was 36× larger than it
+looked): pruning the 8 dangling `__init__` re-exports moved importable 318 → 329 only, because **294
+live quarry modules import the parked modules DIRECTLY** (`discount_curve` by 223, `day_count` by 221,
+`serialisable` by 92). Original finding below, kept for the record.
+
+**NG-DEFER-QUARRYIMPORT (original) — `import pricebook.*` from `quarry/` raises `ModuleNotFoundError`.**
 `quarry/pricebook/core/__init__.py` imports `pricebook.core.discount_curve`, which was **physically
 parked** to `quarry/parked/topic-01-yield-curve/discount_curve.py` at the T1 close (doc 13 parking is
 a `git mv`, so the package's own `__init__` was left dangling).

@@ -248,3 +248,30 @@ filled as covered).
 
 This scoping pass is the honest denominator for the topic — and it is the thing that makes "covered"
 checkable rather than felt.
+
+---
+
+## 7. The park model — tracker state, not a physical move (amended 2026-10-26)
+
+**Ruling:** `handoffs/rulings_quarry_park_model.md`. Superseding the physical-park event this document
+described at a topic close:
+
+**A park does not `git mv` anything.** A crossed module is ticked *deletable* in
+`quarry_reconciliation.md` and recorded on its MANIFEST row — and its file **stays where it is** in
+`quarry/`, until the whole quarry is deleted once, at v1.0.
+
+**Why the physical move had to go.** It was adopted for directory tidiness and carried no semantic
+weight — the tick and the MANIFEST row already carry "this crossed, it is deletable", and CLAUDE.md
+§4/§6 already make the tracker the progress bar rather than the directory. But it removed modules the
+live quarry imports **directly**: the Topic-0 (v0.74.0) and Topic-1 (v0.98.0) parks moved 19 modules
+that **294 live quarry modules** import by name, which broke `import pricebook` for **265 of 583**
+modules and made §7c's nightly quarry regression impossible for ~40 versions.
+
+Of the three commitments in tension — physical parking, the read-only quarry, and §7c's running
+regression — the physical move was the youngest and the only one with no semantic weight, so it
+yielded.
+
+**Both historical parks are reverted** (the 19 files are back at their original paths;
+`parked/*/MANIFEST.md` stays as the record of what crossed). **`verify.py quarry`** walks the quarry
+package tree and asserts the importable-module count against a committed floor, RED on any drop — the
+check that would have caught v0.74.0 the day it happened.

@@ -242,6 +242,18 @@ the whole spine, and a sibling to §1's no-`isinstance` law.
 ## 4. Migration rules (quarry → new tree)
 
 - **Quarry is read-only.** The old tree is never edited or deleted. Done = quarry empty.
+- **A park is a tracker/MANIFEST state, NOT a physical move** (ratified 2026-10-26; ruling
+  `docs/handoffs/rulings_quarry_park_model.md`). A crossed module is ticked *deletable* in
+  `quarry_reconciliation.md` and recorded on its MANIFEST row; **its file stays in `quarry/`** until
+  the whole quarry is deleted at v1.0. The quarry therefore stays **importable** throughout, and
+  §7c's nightly quarry regression runs against it. *"Quarry empty = v1.0"* means every module ticked
+  deletable and the tree cleared **once, at the end** — the physical emptying moves from per-park to
+  once; drawdown (/793) is unchanged.
+  *Precedent: the Topic-0 (v0.74.0) and Topic-1 (v0.98.0) physical parks `git mv`'d 19 modules out of
+  the live package, which broke `import pricebook` for **265 of 583** quarry modules — 294 live modules
+  import those 19 **directly**, so no `__init__` re-export fix could reach it. §7c promised a nightly
+  quarry regression that could not run for ~40 versions. Both parks are reverted; a CI gate
+  (`verify.py quarry`) now walks the tree and holds a floor on the importable count.*
 - **"Crossed" = quarry-deletable, not concept-adapted.** A quarry module counts as migrated
   only when its ng counterpart reaches *realigned parity* and the quarry module could be
   deleted — a simplified skeleton (e.g. flat-curve HW standing in for the general model) is a
@@ -453,7 +465,9 @@ empty = v1.0`, taken literally; drawdown % is the progress bar.
 
 - **CI matrix:** `ubuntu-latest` + `windows-latest`, Python `3.12`, one workflow file.
   Per-PR runs `verify.py acyclic/debt/version/provenance` + the slice's layer tier on
-  both OSes; merge gate = green on both. Full sweep + quarry regression nightly.
+  both OSes; merge gate = green on both. Full sweep + quarry regression nightly — **achievable
+  again as of 2026-10-26**: the quarry imports (792 modules), asserted per-commit by
+  `verify.py quarry` against a committed floor.
 - **Tolerance-based oracles are a HARD rule.** `exp/log/pow/trig` differ 1–2 ULP between
   glibc and the MSVC runtime, so oracles assert tolerances (closed-form `1e-12`; MC/PDE
   their convergence tol), never `==` on transcendental results. The statelessness

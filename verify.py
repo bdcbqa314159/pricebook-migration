@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
+import os
 import re
 import subprocess
 import sys
@@ -240,6 +242,61 @@ def provenance() -> list[str]:
     return errs
 
 
+# The quarry must stay IMPORTABLE. Floor rule (CLAUDE.md §6) applied to the quarry gate:
+# a committed floor on the importable-module count, RED on any drop. Rulings:
+# docs/handoffs/rulings_quarry_park_model.md §3 — which also replaced an earlier proposal to assert
+# `import pricebook` succeeds: that is a PROXY and it passed while 265 of 583 modules were broken
+# (the top package's __init__ does not eagerly import its sub-packages).
+QUARRY = ROOT / "quarry"
+QUARRY_IMPORT_FLOOR = 792
+
+_QUARRY_WALK = """
+import json, pkgutil, importlib, pricebook
+ok, bad = [], []
+for m in pkgutil.walk_packages(pricebook.__path__, prefix="pricebook."):
+    try:
+        importlib.import_module(m.name); ok.append(m.name)
+    except BaseException as e:
+        bad.append(f"{m.name}: {type(e).__name__}: {e}")
+print(json.dumps({"root": pricebook.__file__, "ok": len(ok), "bad": bad[:10], "n_bad": len(bad)}))
+"""
+
+
+def quarry() -> list[str]:
+    """FAIL if the quarry package does not import, or if fewer modules import than the floor.
+
+    Run in a subprocess rooted at `quarry/` because BOTH trees are named `pricebook` since the
+    restart (artifact 23) — ng at `src/pricebook`, the quarry at `quarry/pricebook`. The check
+    asserts the package it measured is actually the quarry one, rather than trusting path order:
+    measuring ng here would be a proxy that passes while the quarry is broken."""
+    if not QUARRY.is_dir():
+        return ["quarry/ is absent — nothing to import-check"]
+    env = {**os.environ, "PYTHONPATH": str(QUARRY), "PYTHONDONTWRITEBYTECODE": "1"}
+    proc = subprocess.run([sys.executable, "-c", _QUARRY_WALK], cwd=QUARRY,
+                          capture_output=True, text=True, env=env)
+    if proc.returncode != 0:
+        return [f"quarry import walk crashed: {proc.stderr.strip().splitlines()[-1:] or proc.stderr!r}"]
+    try:
+        data = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return [f"quarry import walk produced no result: {proc.stdout!r}"]
+    errs: list[str] = []
+    measured = Path(data["root"]).resolve()
+    if QUARRY.resolve() not in measured.parents:
+        errs.append(f"measured the WRONG pricebook package: {measured} is not under {QUARRY}")
+    if data["n_bad"]:
+        errs.append(f"{data['n_bad']} quarry module(s) do not import")
+        errs += [f"    {b}" for b in data["bad"]]
+    if data["ok"] < QUARRY_IMPORT_FLOOR:
+        errs.append(
+            f"only {data['ok']} quarry modules import, floor is {QUARRY_IMPORT_FLOOR} — "
+            "the quarry shrank or broke (a park is a tracker state, not a move: CLAUDE.md §4)"
+        )
+    if not errs:
+        print(f"     {data['ok']} quarry modules import (floor {QUARRY_IMPORT_FLOOR})")
+    return errs
+
+
 def version() -> list[str]:
     """__version__ must match the top CHANGELOG.md entry."""
     m = re.search(r'__version__\s*=\s*"([^"]+)"', _read(SRC / "__init__.py"))
@@ -301,6 +358,7 @@ def main() -> int:
     t.add_argument("--layer", type=int, default=None)  # omitted = every layer present
     sub.add_parser("fields")
     sub.add_parser("layers")
+    sub.add_parser("quarry")
     sub.add_parser("debt")
     sub.add_parser("provenance")
     sub.add_parser("version")
@@ -310,7 +368,7 @@ def main() -> int:
     if args.cmd == "tests":
         return run_tests(args.layer)
     checks = {
-        "acyclic": acyclic, "fields": fields, "layers": layers, "debt": debt,
+        "acyclic": acyclic, "fields": fields, "layers": layers, "debt": debt, "quarry": quarry,
         "provenance": provenance, "version": version,
     }
     if args.cmd == "all":

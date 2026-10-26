@@ -19,8 +19,13 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 23 / 793** — 19 PHYSICALLY PARKED (13 at Topic-0 close **+ 6 at the
-Topic-1 close**, v0.98.0) **+ 4 ticked and awaiting the batch park** (`options/sabr.py`, slice 22,
+**Deletable (the §4 drawdown bar): 23 / 793** — **all 23 are TICKED; none is physically moved**
+(park-model amendment, 2026-10-26: a park is a tracker/MANIFEST state, not a `git mv` — CLAUDE.md §4,
+doc 13 §7, ruling `rulings_quarry_park_model.md`). The 19 formerly physically parked at the Topic-0
+(v0.74.0) and Topic-1 (v0.98.0) closes have been **restored to their original quarry paths**: those
+moves broke `import pricebook` for 265 of 583 modules, because 294 live modules import those 19
+directly. `parked/*/MANIFEST.md` remains the record of what crossed; the quarry is deleted **once**,
+at v1.0. Formerly *"19 physically parked + 4 ticked awaiting the batch park"* (`options/sabr.py`, slice 22,
 v0.108.0; `options/capfloor.py`, slice 23, v0.109.0; `options/implied_vol.py`, slice 24, v0.110.0;
 `options/swaption_vol_cube.py`, slice B, v0.114.0 —
 physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 modules below are now git-mv'd into `parked/topic-01-yield-curve/`:
