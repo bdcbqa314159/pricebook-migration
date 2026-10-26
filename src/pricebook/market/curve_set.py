@@ -19,27 +19,32 @@ Provenance:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 from enum import Enum
 from typing import Mapping
 
 from pricebook.foundation import Currency, RateIndex
+from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.curve import CurveHandle
+from pricebook.market.survival_curve import SurvivalHandle
 
 
 class CurveRole(Enum):
     DISCOUNT = "discount"
     PROJECTION = "projection"
+    SURVIVAL = "survival"   # credit (B6 slice 1) — keyed by ReferenceEntity
 
 
 @dataclass(frozen=True)
 class CurveKey:
     """Identifies a curve in the set: its role, the asset dimension it is keyed by (a
     `Currency` for discount, a `RateIndex` for projection), and — for discount — the CSA
-    `collateral` currency (`None` = own-currency/OIS). Doc 19's fuller asset keying (entity,
-    underlying, pair) arrives with those asset classes."""
+    `collateral` currency (`None` = own-currency/OIS). Doc 19's fuller asset keying arrives with
+    each asset class: `ReferenceEntity` landed with credit (B6 slice 1); underlying and pair follow
+    with equity and FX. A new asset class adds **keys, not fields** (§3c)."""
 
     role: CurveRole
-    id: Currency | RateIndex
+    id: Currency | RateIndex | ReferenceEntity
     collateral: Currency | None = None
 
 
@@ -60,6 +65,18 @@ class CurveSet:
         """The forward-projection curve for `index`. Single-curve is the degenerate
         config: an OIS index's projection curve IS its discount curve (same object)."""
         return self.curves[CurveKey(CurveRole.PROJECTION, index)]
+
+    def survival(self, entity: ReferenceEntity) -> SurvivalHandle:
+        """The entity's survival curve. Distinct capability, distinct key (docs/19 §2) — it returns
+        a `SurvivalHandle`, not a `CurveHandle`, because `Q` and `df` are different questions and a
+        survival curve has no `df`. Raises on an unknown entity rather than defaulting to a
+        risk-free one: a silently risk-free credit curve prices every CDS to zero protection."""
+        key = CurveKey(CurveRole.SURVIVAL, entity)
+        try:
+            curve = self.curves[key]
+        except KeyError:
+            raise KeyError(f"no survival curve for {entity.name} in the curve set") from None
+        return cast("SurvivalHandle", curve)
 
     def with_curve(self, key: CurveKey, curve: CurveHandle) -> CurveSet:
         """A new `CurveSet` with the curve at `key` replaced (the base is never mutated —

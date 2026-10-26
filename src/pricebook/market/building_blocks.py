@@ -20,6 +20,8 @@ Provenance:
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from pricebook.foundation import (
     Accrual,
     CouponPeriod,
@@ -29,6 +31,7 @@ from pricebook.foundation import (
     icma_coupon_period,
 )
 from pricebook.market.curve import CurveHandle
+from pricebook.market.survival_curve import SurvivalHandle
 
 # A day count that needs convention context beyond the two dates: ICMA needs the coupon frequency,
 # BUS/252 needs the calendar. Both are read FROM THE SCHEDULE'S `terms` (§3d — context travels with
@@ -108,3 +111,92 @@ def float_leg_pv(
             projection, accrual, coupon_period=cp, calendar=cal
         )
     return total
+
+# ── credit atoms (B6 slice 1) — the credit `rpv01`, defined ONCE ────────────────────────────
+def risky_annuity(
+    schedule: Schedule, day_count: DayCountConvention, discount: CurveHandle, survival: SurvivalHandle
+) -> float:
+    """The **survival-weighted** premium annuity — the credit sibling of `rpv01`, and THE single
+    definition of it. The bootstrap composes it to fit (`s = protection / risky_annuity`) and the
+    CDS engine composes the same one to price, so they cannot disagree (§3d). This is the annuity
+    lesson applied to credit *before* it can bite: if the fit and the price rolled separate credit
+    annuities, the calibrator would make each CDS par while the engine marked it non-zero, and a
+    par-spread-to-zero oracle would be blind to it (it telescopes, exactly as par swaps do).
+
+        A = Σᵢ τᵢ·df(payᵢ)·Q(payᵢ)                         (premium paid only if still alive)
+          + Σᵢ (τᵢ/2)·df(midᵢ)·(Q(startᵢ) − Q(endᵢ))        (accrual on default)
+
+    **The accrual-on-default convention is explicit, not incidental** (the spec requires it stated):
+    on default mid-period the protection seller is owed the premium accrued to the default date, and
+    this uses the standard **half-period** approximation — default is taken at the period midpoint,
+    so the expected accrual is `τ/2` discounted at the midpoint. It is the ISDA Standard CDS Model's
+    approximation and the quarry's; a finer within-period integration is deferred to its first
+    consumer (a same-day/short-stub CDS, where the half-period assumption is coarsest)."""
+    total = 0.0
+    for i, p in enumerate(schedule.periods):
+        cp, cal = _coupon_context(schedule, p, day_count, is_first=i == 0)
+        tau = Accrual(p.accrual_start, p.accrual_end, day_count).year_fraction(
+            coupon_period=cp, calendar=cal
+        )
+        total += tau * discount.df(p.payment_date) * survival.survival(p.payment_date)
+        mid = _midpoint(p.accrual_start, p.accrual_end)
+        q_default = survival.survival(p.accrual_start) - survival.survival(p.accrual_end)
+        total += (tau / 2.0) * discount.df(mid) * q_default
+    return total
+
+
+def protection_leg(
+    accrual: Accrual,
+    recovery: float,
+    discount: CurveHandle,
+    survival: SurvivalHandle,
+    steps_per_year: int = 12,
+) -> float:
+    """The protection leg per unit notional — THE single definition, composed by both the bootstrap
+    and the CDS engine (§3d).
+
+        P = (1−R) · ∫ df(t)·(−dQ(t))  ≈  (1−R) · Σ df(midⱼ)·(Q(tⱼ) − Q(tⱼ₊₁))
+
+    discretised on a uniform grid of `steps_per_year`, with each step's loss discounted at the step
+    **midpoint** — default is taken as uniformly distributed within the step, so the midpoint is its
+    expected timing. `(Q(tⱼ) − Q(tⱼ₊₁))` is the exact probability of defaulting inside the step, so
+    the only approximation is *when* within the step, never *whether*: the sum of the increments is
+    `Q(0) − Q(T)` by construction regardless of the grid, which is why refining the grid converges
+    rather than rescaling. Under a flat hazard and flat rate it converges to the analytic
+    `(1−R)·λ/(r+λ)·(1−e^{−(r+λ)T})`, which is this atom's oracle.
+
+    **`steps_per_year=12` is chosen on measurement, not convention.** Against the analytic integral
+    (r=3%, λ=5%, R=40%, T=5Y, value 0.1236851) the absolute error is: n=1 → 1.6e-5, **n=12 → 2.1e-6**,
+    n=52 → 4.9e-6, n=365 → 5.1e-6. Refining past ~monthly makes it *worse* and then plateaus, because
+    `CurveHandle.df` takes a **date**: at daily steps the midpoint of a one-day step floors to that
+    step's start, so `df` is read half a day early at every step — a systematic bias that refinement
+    cannot remove, only accumulate. The midpoint rule's own quadratic convergence wins until it meets
+    that day-granularity floor, which is at roughly monthly steps. (The quarry defaulted to 12 too;
+    the measurement says it was right.) A sub-day-accurate protection leg needs a `df(t: float)`
+    capability, deferred to a consumer that can justify widening the protocol.
+
+    `recovery` is explicit, never defaulted: a guessed R silently rescales every credit number
+    (invariant 5)."""
+    if not 0.0 <= recovery < 1.0:
+        raise ValueError(f"recovery must be in [0, 1); got {recovery}")
+    if steps_per_year < 1:
+        raise ValueError(f"steps_per_year must be positive; got {steps_per_year}")
+    years = accrual.year_fraction()
+    if years <= 0.0:
+        return 0.0
+    n = max(1, int(round(years * steps_per_year)))
+    span = (accrual.end - accrual.start).days
+    total = 0.0
+    for j in range(n):
+        d0 = accrual.start + timedelta(days=int(span * j / n))
+        d1 = accrual.end if j == n - 1 else accrual.start + timedelta(days=int(span * (j + 1) / n))
+        if d1 <= d0:
+            continue
+        mid = _midpoint(d0, d1)
+        total += discount.df(mid) * (survival.survival(d0) - survival.survival(d1))
+    return (1.0 - recovery) * total
+
+
+def _midpoint(start: date, end: date) -> date:
+    """The period midpoint — shared by both credit atoms so they cannot disagree on it."""
+    return date.fromordinal((start.toordinal() + end.toordinal()) // 2)
