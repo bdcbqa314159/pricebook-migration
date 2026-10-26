@@ -40,10 +40,11 @@ from pricebook.foundation import (
     ScheduleTerms,
     build_schedule,
 )
+from pricebook.foundation.money import Currency
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.foundation.solvers import invert_increasing
 from pricebook.market.building_blocks import protection_leg, risky_annuity
-from pricebook.market.curve import CurveHandle
+from pricebook.market.snapshot import MarketSnapshot
 from pricebook.market.survival_curve import SurvivalCurve
 
 #: Market-standard CDS premium conventions. Quarterly ACT/360 is the ISDA standard; they are stated
@@ -69,15 +70,17 @@ class CdsParQuote:
 @dataclass(frozen=True)
 class CreditBootstrapSpec:
     """What to fit: the `entity` the curve is keyed by, its par `quotes` (ascending maturities), the
-    risk-free `discount` curve the CDS discounts on, the `recovery` rate, and the `solve` config.
+    `currency` the CDS discounts in, the `market` snapshot it calibrates against, and the `solve`
+    config.
 
-    `recovery` has **no default** — a guessed R silently rescales every credit number, since the
-    protection leg is proportional to `(1−R)` (invariant 5, and audit F8's lesson for β)."""
+    **Recovery is read from the market, not passed here** (slice 4): it is L1 state (§3c), and the
+    CDS mark reads the same `scalars[RecoveryKey(entity)]`, so the fit and the price cannot use
+    different R's. They could before, and a par quote then marked to ≈96bp of notional silently."""
 
     entity: ReferenceEntity
+    currency: Currency
     quotes: tuple[CdsParQuote, ...]
-    discount: CurveHandle
-    recovery: float
+    market: MarketSnapshot
     solve: SolveConfig = field(default_factory=SolveConfig)
 
 
@@ -90,13 +93,16 @@ def bootstrap_survival_curve(
     swaption-cube lesson)."""
     if not spec.quotes:
         return CalibrationFailure("credit bootstrap needs at least one par CDS quote")
-    if not 0.0 <= spec.recovery < 1.0:
-        return CalibrationFailure(f"recovery must be in [0, 1); got {spec.recovery}")
     maturities = [q.maturity for q in spec.quotes]
     if any(b <= a for a, b in zip(maturities, maturities[1:])):
         return CalibrationFailure("par CDS quotes must have strictly ascending maturities")
 
-    measure = _measure(spec)
+    try:
+        recovery = spec.market.recovery(spec.entity)
+        discount = spec.market.curves.discount(spec.currency)
+    except KeyError as exc:
+        return CalibrationFailure(str(exc))
+    measure = getattr(discount, "time_measure", None)
     if measure is None:
         return CalibrationFailure("the discount curve does not expose a time measure to share")
     valuation = measure.anchor
@@ -119,8 +125,8 @@ def bootstrap_survival_curve(
             """CDS value at the trial pillar. Increasing in `−log Q`, so the solve is monotone:
             a lower Q means more default probability, so more protection and less premium."""
             trial = SurvivalCurve(measure, (*times, _t), (*survivals, q_pillar))
-            prot = protection_leg(_a, spec.recovery, spec.discount, trial)
-            prem = _q.spread * risky_annuity(_s, _PREMIUM_DAY_COUNT, spec.discount, trial)
+            prot = protection_leg(_a, recovery, discount, trial)
+            prem = _q.spread * risky_annuity(_s, _PREMIUM_DAY_COUNT, discount, trial)
             return prot - prem
 
         lo = survivals[-1]                       # Q cannot rise: the previous pillar is the ceiling
@@ -161,8 +167,3 @@ def bootstrap_survival_curve(
         return CalibrationFailure(f"the bootstrapped curve is not a valid survival curve: {exc}")
     return curve, CalibrationResult(tuple(residuals), converged=True, jacobian=None)
 
-
-def _measure(spec: CreditBootstrapSpec):
-    """The `TimeMeasure` the survival curve must share with the discount curve (§3d — one
-    `date → t` map, so the two curves' axes cannot drift)."""
-    return getattr(spec.discount, "time_measure", None)

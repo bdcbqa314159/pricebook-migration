@@ -21,6 +21,7 @@ from datetime import date
 from typing import Mapping
 
 from pricebook.foundation import Currency, CurrencyPair, FixingHistory, FixingSource, fx_pair
+from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.curve_set import CurveSet
 from pricebook.market.vol_surface import SabrSurface, Surface, SurfaceKey, SwaptionSurfaceKey
 
@@ -34,6 +35,20 @@ class ScalarKey:
 
 
 @dataclass(frozen=True)
+class RecoveryKey:
+    """A key into `scalars` for a reference entity's **recovery rate** — the fraction of notional
+    recovered on default. A sibling of `ScalarKey`, not a field on it: a new asset class adds
+    **keys, not fields** (§3c), the same way `surfaces` takes `SurfaceKey | SwaptionSurfaceKey`.
+
+    **Recovery is market state, not contract data** (§3c: *"Hazard/survival curve and recovery → L1
+    (risk bumps them)"*). It lived on the L2 `CDS` and on the bootstrap spec until slice 4, which is
+    two sources for one number: with the curve bootstrapped at R=0.40 and the CDS marked at R=0.30,
+    a **par** quote priced to ≈96bp of notional, silently. One home makes that unrepresentable."""
+
+    entity: ReferenceEntity
+
+
+@dataclass(frozen=True)
 class MarketSnapshot:
     """The market state a model was calibrated to (A1). `valuation_date` is 'today';
     `curves` is the keyed `CurveSet`; `scalars` holds FX spots (and future single-number
@@ -41,9 +56,26 @@ class MarketSnapshot:
 
     valuation_date: date
     curves: CurveSet
-    scalars: Mapping[ScalarKey, float] = field(default_factory=dict)
+    scalars: Mapping[ScalarKey | RecoveryKey, float] = field(default_factory=dict)
     surfaces: Mapping[SurfaceKey | SwaptionSurfaceKey, Surface | SabrSurface] = field(default_factory=dict)
     fixings: FixingSource = field(default_factory=lambda: FixingHistory({}))  # the "series" shape (doc 19 §2)
+
+    def __post_init__(self) -> None:
+        for key, value in self.scalars.items():
+            if isinstance(key, RecoveryKey) and not 0.0 <= value < 1.0:
+                raise ValueError(
+                    f"recovery for {key.entity.name} must be in [0, 1); got {value}"
+                )
+
+    def recovery(self, entity: ReferenceEntity) -> float:
+        """The entity's recovery rate. **The single source** both the survival bootstrap and the CDS
+        mark read, so they cannot disagree (§3d). Raises on an absent entity rather than assuming
+        the 0.40 market convention — that convention is exactly why a silent default would be
+        dangerous: it would look right in every standard case and wrong in the ones that matter."""
+        try:
+            return self.scalars[RecoveryKey(entity)]
+        except KeyError:
+            raise KeyError(f"no recovery rate for {entity.name} in the snapshot") from None
 
     def fx_rate(self, base: Currency, quote: Currency) -> float:
         """One unit of `base` in units of `quote`. Resolves the declared canonical pair

@@ -74,7 +74,7 @@ def _cds(spread: float, years: int = 5) -> CDS:
 def _bootstrapped(market: MarketSnapshot, spreads: dict[int, float]):
     quotes = tuple(CdsParQuote(VAL + Tenor(y, Y), s) for y, s in sorted(spreads.items()))
     out = bootstrap_survival_curve(
-        CreditBootstrapSpec(ACME, quotes, market, SolveConfig(tolerance=1e-14))
+        CreditBootstrapSpec(ACME, EUR, quotes, market, SolveConfig(tolerance=1e-14))
     )
     assert not isinstance(out, CalibrationFailure), out
     return out[0]

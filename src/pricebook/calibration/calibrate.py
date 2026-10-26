@@ -48,7 +48,7 @@ from pricebook.market.curve import CurveHandle, DiscountCurve
 from pricebook.market.survival_curve import SurvivalHandle
 from pricebook.market.curve_set import CurveKey, CurveRole, CurveSet
 from pricebook.market.quotes import DepositQuote, FRAQuote, FutureQuote, ParSwapQuote
-from pricebook.market.snapshot import MarketSnapshot, ScalarKey
+from pricebook.market.snapshot import MarketSnapshot, RecoveryKey, ScalarKey
 from pricebook.models.discounting_model import DiscountingModel
 from pricebook.products.cash import FRA, Deposit, Future
 from pricebook.products.swap import FixedLeg, FloatLeg, VanillaSwap, XccyBasisSwap

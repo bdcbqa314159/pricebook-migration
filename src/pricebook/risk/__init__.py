@@ -6,7 +6,7 @@ one `Bump` strategy per shape. Nothing at L≤4 imports this layer (enforced by 
 """
 
 from pricebook.risk.bump import Bump, CurveBasisBump, CurveIdentityBump, SurfaceBump
-from pricebook.risk.credit import bucketed_cs01, cs01
+from pricebook.risk.credit import bucketed_cs01, cs01, rec01
 from pricebook.risk.greeks import central_diff, ir_basis_delta, ir_delta, vol_vega
 from pricebook.risk.priceable import Priceable, priceable
 
@@ -23,4 +23,5 @@ __all__ = [
     "vol_vega",
     "cs01",
     "bucketed_cs01",
+    "rec01",
 ]

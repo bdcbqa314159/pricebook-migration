@@ -20,7 +20,8 @@ from typing import cast
 from typing import Protocol, runtime_checkable
 
 from pricebook.market.curve_set import CurveKey, CurveSet
-from pricebook.market.snapshot import MarketSnapshot
+from pricebook.foundation.reference_entity import ReferenceEntity
+from pricebook.market.snapshot import MarketSnapshot, RecoveryKey
 from pricebook.market.survival_curve import SurvivalHandle
 from pricebook.market.vol_surface import SurfaceKey, flat_surface
 
@@ -102,3 +103,20 @@ class SurvivalPillarBump:
         # `CurveSet.survival` performs, kept here rather than inspecting the object (§1)
         curve = cast("SurvivalHandle", market.curves.curves[self.key])
         return replace(market, curves=market.curves.with_curve(self.key, curve.bumped_at(self.pillar, shift)))
+
+
+@dataclass(frozen=True)
+class RecoveryBump:
+    """Bumps the recovery rate of one entity in the snapshot's `scalars`.
+
+    This is an ordinary snapshot bump precisely because slice 4 moved recovery to L1 (§3c). While it
+    lived on the L2 product there was no way to express it here — risk would have needed a second,
+    instrument-mutating bump mechanism beside this one, and a type-switch to choose between them,
+    which is what §1 forbids. One home, one mechanism."""
+
+    entity: ReferenceEntity
+
+    def apply(self, market: MarketSnapshot, shift: float) -> MarketSnapshot:
+        key = RecoveryKey(self.entity)
+        scalars = {**market.scalars, key: market.scalars[key] + shift}
+        return replace(market, scalars=scalars)

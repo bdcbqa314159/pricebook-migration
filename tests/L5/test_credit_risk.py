@@ -32,7 +32,7 @@ from pricebook.foundation import (
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.curve import DiscountCurve
 from pricebook.market.curve_set import CurveKey, CurveRole, CurveSet
-from pricebook.market.snapshot import MarketSnapshot
+from pricebook.market.snapshot import MarketSnapshot, RecoveryKey
 from pricebook.market.survival_curve import SurvivalCurve
 from pricebook.models.discounting_model import DiscountingModel
 from pricebook.products.credit import CDS, PremiumLeg
@@ -61,7 +61,8 @@ def _snap(surv: SurvivalCurve, r: float = 0.03) -> MarketSnapshot:
             SURV_KEY: surv,
         }
     )
-    return MarketSnapshot(VAL, curves)
+    # recovery is L1 since slice 4 — the single source the bootstrap and the mark both read
+    return MarketSnapshot(VAL, curves, scalars={RecoveryKey(ACME): RECOVERY})
 
 
 def _cds(spread: float, years: int = 5) -> CDS:
@@ -69,7 +70,7 @@ def _cds(spread: float, years: int = 5) -> CDS:
         VAL, VAL + Tenor(years, Y),
         ScheduleTerms(frequency=Frequency.QUARTERLY, roll=RollRule(calendar=None)),
     )
-    return CDS(ACME, PremiumLeg(sched, DC360, spread), RECOVERY, Money(NOTIONAL, EUR))
+    return CDS(ACME, PremiumLeg(sched, DC360, spread), Money(NOTIONAL, EUR))
 
 
 def _p(cds: CDS):
@@ -111,7 +112,7 @@ def test_cs01_is_positive_for_bought_protection_and_flips_with_the_notional() ->
     market = _snap(SurvivalCurve.flat_hazard(TM, 0.03, until=FAR))
     bought = cs01(_p(_cds(0.0180)), market, SURV_KEY)
     sold = _cds(0.0180)
-    sold = CDS(sold.entity, sold.premium, sold.recovery, Money(-NOTIONAL, EUR))
+    sold = CDS(sold.entity, sold.premium, Money(-NOTIONAL, EUR))
     assert not isinstance(bought, PricingFailure)
     sold_cs01 = cs01(_p(sold), market, SURV_KEY)
     assert not isinstance(sold_cs01, PricingFailure)
@@ -123,8 +124,12 @@ def test_cs01_is_positive_for_bought_protection_and_flips_with_the_notional() ->
 def _bootstrapped(spreads: dict[int, float], r: float = 0.03):
     disc = DiscountCurve.flat(TM, r, until=FAR)
     quotes = tuple(CdsParQuote(VAL + Tenor(y, Y), s) for y, s in sorted(spreads.items()))
+    base = MarketSnapshot(
+        VAL, CurveSet({CurveKey(CurveRole.DISCOUNT, EUR): disc}),
+        scalars={RecoveryKey(ACME): RECOVERY},
+    )
     out = bootstrap_survival_curve(
-        CreditBootstrapSpec(ACME, quotes, disc, RECOVERY, SolveConfig(tolerance=1e-14))
+        CreditBootstrapSpec(ACME, EUR, quotes, base, SolveConfig(tolerance=1e-14))
     )
     assert not isinstance(out, CalibrationFailure), out
     return out[0]
@@ -170,7 +175,11 @@ def test_only_buckets_up_to_maturity_carry_risk() -> None:
 # ── failure propagation (invariant 4) ──────────────────────────────────────────────────────
 def test_cs01_without_a_survival_curve_is_a_failure_value() -> None:
     curves = CurveSet({CurveKey(CurveRole.DISCOUNT, EUR): DiscountCurve.flat(TM, 0.03, until=FAR)})
-    out = cs01(_p(_cds(0.0180)), MarketSnapshot(VAL, curves), SURV_KEY)
+    out = cs01(
+        _p(_cds(0.0180)),
+        MarketSnapshot(VAL, curves, scalars={RecoveryKey(ACME): RECOVERY}),
+        SURV_KEY,
+    )
     assert isinstance(out, PricingFailure), out
 
 
