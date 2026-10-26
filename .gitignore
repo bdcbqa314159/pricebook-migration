@@ -64,11 +64,23 @@ coverage.xml
 # them; nothing in archive is referenced by active code or tests.
 .archive/
 
-# Cross-surface prompt channel between Claude Code and Cowork (added 2026-10-25).
-# Both surfaces run on this machine and read the repo directly, so the thread is
-# local working state, not history: keeping it untracked means it cannot add commit
-# noise to the one-slice-one-commit-one-stamp sequence. Decisions that matter are
-# written to redesign/ and OPEN.md in the same turn; the thread is cleared when a
-# slice closes. .cowork/README.md is the protocol Cowork reads — regenerate from
-# the `cowork` skill if the repo's conventions change.
-.cowork/
+# Cross-surface prompt channel between Claude Code and Cowork (added 2026-10-25;
+# split 2026-10-26). The two files have opposite lifetimes:
+#
+#   thread.md  — the CONVERSATION. Local working state, not history: untracked so it
+#                cannot add commit noise to the one-slice-one-commit-one-stamp
+#                sequence, and cleared when a slice closes. Decisions that matter are
+#                written to docs/ and OPEN.md in the same turn.
+#   README.md  — the PROTOCOL Cowork obeys. TRACKED. It cites this repo's own law
+#                (§1/§4/§5/§7/§8, its doc numbers, real commit examples) and has
+#                earned amendments from real failures — the re-read-before-append rule
+#                (a collision wasted thread entry 0003) and the
+#                working-tree-is-shared-state rule (Cowork reads the checked-out
+#                branch, so a checkout changes its world). Regenerating it from the
+#                generic `cowork` skill would silently discard all of that, so it is
+#                repo convention, not working state.
+#
+# Note the form: `.cowork/*` not `.cowork/`, because git cannot re-include a file
+# whose parent directory is itself excluded.
+.cowork/*
+!.cowork/README.md
