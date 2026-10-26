@@ -11,6 +11,35 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.115.0] - 2026-10-26
+
+**Swaption / vol-cube cluster checkpoint (§6 hard stop at a capability-cluster boundary).** Report:
+`docs/handoffs/CP_swaption_cluster.md`, carrying the four review inputs plus the named next
+checkpoint. No pricing logic touched. Drawdown unchanged at **23 / 793** (Cowork ratified the
+slice-B tick, thread 0011).
+
+### Added
+- `docs/handoffs/CP_swaption_cluster.md` — the cluster's checkpoint: **oracle-quality audit run
+  against the AMENDED §6** (the first one under the floor rule and doc 11's new standing question),
+  drawdown reconciliation, a 6-item challenge-me list, and the smell+debt scan with
+  **NG-DEFER-QUARRYIMPORT's four options** ranked, per thread 0011's fold-it-in ruling.
+
+### Fixed — finding O1 from that audit, closed in the same commit
+- **`calibrate_sabr_smile` was the one cluster gate with an unasserted population.** It builds one
+  residual per quoted strike and accepts/rejects on `max(abs(r) for r in residuals)`; nothing
+  asserted `len(residuals) == len(strikes)`, so a short list would have passed the 1bp gate on a
+  subset while the remaining strikes went unfitted. It cannot happen today — `SmileQuote`'s own
+  invariant guarantees the length — so the gap was *guaranteed by an invariant and never asserted*,
+  the opposite posture to the cube (where the type makes a drop unrepresentable **and** the oracle
+  asserts it anyway). New test closes it; `TEST_FLOOR` 374 → 375.
+
+### Audit result, for the record
+Five of the cluster's nine oracle files carry a genuine structural/count oracle — the 2Y cap's
+**7** caplets, the strip building the ladder (not one caplet per quote), the cube's node count and
+poisoned-node floor, the non-canonical S-identity, and `sorted(surface.params) == expected_expiries`.
+Three are scalar inversions/reprices with no population to floor, which the report states rather
+than assumes. Only O1 was a real gap.
+
 ## [0.114.0] - 2026-10-26
 
 **Swaption vol-cube calibration (T1 slice B) — `options/swaption_vol_cube.py` retired. Drawdown

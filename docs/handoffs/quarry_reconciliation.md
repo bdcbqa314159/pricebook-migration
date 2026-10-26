@@ -255,6 +255,12 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   with 25 quarry importers; the physical `git mv` batches at the topic close). `options/synthetic_swaption_data.py`
   imports `SwaptionVolCube`/`build_swaption_vol_cube` — **forward-linked on its own row below**.
   Evidence: `AUDIT_swaption_vol_cube.md` + `AUDIT_slice_B_forward_threading.md` + `CHANGELOG` v0.114.0.
+  **COWORK RATIFIED 2026-10-26 (tick 22 → 23 / 793):** retire-read spot-checked per §4 — every omission
+  evidenced (`SABRNode`/`SwaptionVolCubeResult` 0 external refs; `_nearest_sabr`/ATM-fast-path/bare-
+  fallbacks shed as silent-wrongness; `bumped()` not ported, 5.4–6.2× measured), all three deferrals
+  are capabilities not products (none blocks the tick), resident-importer precedent (`sabr.py` @ 25)
+  sound. Deletable bar met; the tick stands. Thread 0011; carried into the swaption-cluster checkpoint
+  as the drawdown review input.
 
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
