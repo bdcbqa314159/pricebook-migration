@@ -269,11 +269,19 @@ the whole spine, and a sibling to §1's no-`isinstance` law.
   strips flat whatever the structure's shape. Therefore, **where a slice's content IS a structure — a
   ladder, a grid, a schedule, a decomposition — at least one oracle must test the structure itself**,
   not a scalar off it: a *count* (a 5Y cap strips 19 caplet pillars, not 4), a *finer-grid*
-  cross-check, or *parity composed from the atoms alone*. Second clause: **a filtered oracle grid must
-  assert a floor on how many cases survive the filter** — a filter with no floor can quietly eat its
-  whole suite and stay green. *(Precedent: audit #10 — a flat cap-vol curve and a
-  reprice-what-you-stripped oracle were both blind to the caplet-grid≠quote-grid bug for three slices;
-  a count caught it.)*
+  cross-check, or *parity composed from the atoms alone*. Second clause — **the floor rule, and it binds the
+  verification apparatus itself** (amended 2026-10-26; ruling:
+  `docs/handoffs/rulings_floor_rule.md`). A gate's green is evidence only if the gate also asserts a
+  floor on *what it examined*; green over an unknown, empty, or truncated population is not green.
+  Two faces: **floor-on-population** — any check that filters, collects, or iterates a set asserts a
+  minimum count of survivors (a slice's oracle grid *and* CI's test collection — a count, not
+  "green"); and **resolve-don't-just-exist** — a presence check must dereference what it names (a
+  provenance header must *resolve to a file*, not merely exist). *(Precedent — three instances of one
+  shape: audit #10, a flat cap-vol curve and a reprice-what-you-stripped oracle blind to the
+  caplet-grid≠quote-grid bug for three slices, caught by a count; `--layer 0`, CI silently gating 177
+  of 366 tests for six slices while every report read "gates green"; `provenance`, four lines asserted
+  present while 17 of 45 `quarry:` paths dangled, two wrong since the day they were written. Each
+  asserted existence or greenness and no floor.)*
 - **Domain build order (supersedes demand-driven).** Migration proceeds **block by block in
   financial-engineering dependency order** — B0 conventions → B1 curves → B2 linear products →
   B3 curve construction → B4 models → B5 non-linear+engines → B6 credit → B7 risk/XVA →

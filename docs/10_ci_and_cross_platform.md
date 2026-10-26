@@ -82,3 +82,24 @@ Python versions only when a real need appears.
 3. **Track the discipline inputs.** ✅ `OPEN.md`, `CHANGELOG.md`, `CLAUDE.md`, `redesign/`
    are git-tracked (gitignore exceptions applied) so `verify.py` runs in CI. The
    "root-notes-stay-local" quarry convention is superseded for these files.
+
+---
+
+## The test floor (amended 2026-10-26 — ruling: `handoffs/rulings_floor_rule.md`)
+
+CI runs the **whole** suite: `verify.py tests` with no `--layer` ceiling, discovering every
+`tests/L*` directory present. `--layer N` survives only for the per-tier local run.
+
+**And the collected count is asserted against a committed floor** — `TEST_FLOOR` in `verify.py`,
+currently **366**. CI is **RED** below it. A slice that adds a test tier raises `TEST_FLOOR` in the
+same commit.
+
+**Why a floor and not just "no ceiling":** removing the ceiling fixes *truncation*; the floor also
+catches *shrinkage* — tests silently dropped, a collection error swallowing a directory, a rename
+orphaning a tier. Both are the same defect: green over a population nobody counted. This is the
+floor rule's first face (CLAUDE.md §6), and it is the assertion that would have caught the original
+`--layer 0` bug: that command collects 177 against a floor of 366.
+
+The never-bumped `ci.yml` comment *"Bump --layer as topics add tiers"* was the original sin. A number
+that must be remembered will eventually not be; a hard floor plus discovery removes the need to
+remember.

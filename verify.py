@@ -111,8 +111,28 @@ def run_tests(max_layer: int | None) -> int:
         dirs = [str(TESTS / f"L{n}") for n in range(max_layer + 1) if (TESTS / f"L{n}").is_dir()]
     if not dirs:
         print(f"no test dirs at layer <= {max_layer}")
-        return 0
-    return subprocess.call([sys.executable, "-m", "pytest", *dirs])
+        return 1
+    rc = subprocess.call([sys.executable, "-m", "pytest", *dirs])
+    if rc != 0:
+        return rc
+    # Floor rule, first face: floor-on-population. Green over a truncated collection is
+    # not green (CLAUDE.md 6; ruling: docs/handoffs/rulings_floor_rule.md). Only the
+    # un-truncated run is held to the floor; an explicit --layer N is a local tier run.
+    if max_layer is None:
+        n = _collected(dirs)
+        print(f"collected {n} tests (floor {TEST_FLOOR})")
+        if n < TEST_FLOOR:
+            print(f"FAIL collected {n} < TEST_FLOOR {TEST_FLOOR} — truncated or shrunken suite")
+            return 1
+    return 0
+
+
+def _collected(dirs: list[str]) -> int:
+    """How many tests pytest actually collected, for the floor assertion."""
+    out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", *dirs],
+                         capture_output=True, text=True).stdout
+    m = re.search(r"(\d+) tests? collected", out)
+    return int(m.group(1)) if m else 0
 
 
 _FIELD_LIMIT = 5
@@ -181,14 +201,42 @@ def debt() -> list[str]:
 _PROV_KEYS = ("quarry:", "source:", "oracle:", "slice:")
 
 
+# The committed test floor (the floor rule, CLAUDE.md 6 second clause; ruling:
+# docs/handoffs/rulings_floor_rule.md). CI is RED below it. A slice that adds a test
+# tier raises this in the same commit. First value = the restart's measured 366.
+TEST_FLOOR = 366
+
+# A `quarry:` value that names no path — a module with no quarry ancestor.
+_NO_QUARRY = {"—", "none", "(none", "(none)", "-"}
+
+
 def provenance() -> list[str]:
-    """Every landed module carries the 4-line provenance header (docs/09)."""
+    """Every landed module carries the 4-line provenance header (docs/09), AND every
+    `quarry:` path RESOLVES to a file.
+
+    The floor rule's second face — resolve-don't-just-exist (CLAUDE.md 6; ruling:
+    docs/handoffs/rulings_floor_rule.md). Asserting the four lines are *present* is a
+    proxy that passes while 17 of 45 paths dangle: a presence check must dereference
+    what it names, or it is not a gate.
+    """
     errs: list[str] = []
+    checked = 0
     for mod in _src_modules():
         text = _read(mod)
         missing = [k for k in _PROV_KEYS if k not in text]
         if missing:
             errs.append(f"{mod.relative_to(ROOT)}: missing provenance {missing}")
+        for m in re.finditer(r"quarry:\s*(\S+)", text):
+            raw = m.group(1).rstrip(";,.")
+            if raw in _NO_QUARRY or not raw.startswith("quarry/"):
+                continue
+            checked += 1
+            # a header may name a directory ("drew on several modules in curves/"), which
+            # is legitimate provenance — it must still dereference to something real.
+            if not (ROOT / raw).exists():
+                errs.append(f"{mod.relative_to(ROOT)}: quarry path does not resolve: {raw}")
+    if checked == 0:
+        errs.append("no quarry: paths resolved at all — the check examined an empty population")
     return errs
 
 

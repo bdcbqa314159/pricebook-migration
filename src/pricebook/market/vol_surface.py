@@ -7,7 +7,7 @@ their consumer (a calibrated/quoted surface — rule of two). `at(expiry, strike
 upper layers depend on; the `implied_vol` capability reaches it, never a bare value.
 
 Provenance:
-  quarry: quarry/pricebook/models/vol_surface.py (surface concept)
+  quarry: quarry/pricebook/options/vol_surface.py (surface concept)
   source: docs/19 §2 (surfaces shape: strike×expiry, keyed by underlying); ScalarKey precedent
   oracle: a caplet reprices to Black-76 off the surface's flat vol
   slice:  black-caplet (C2 slice 1)

@@ -9,7 +9,7 @@ extends a constant continuously-compounded forward and stays positive — audit 
 is *not* here — it interpolates from interval averages and is curve construction, Topic 1.)
 
 Provenance:
-  quarry: quarry/pricebook/core/interpolation.py
+  quarry: quarry/parked/topic-00-foundation/interpolation.py
   source: linear/log-linear (ours); scipy.interpolate CubicSpline/PchipInterpolator/Akima1DInterpolator
   oracle: nodes reproduced; PCHIP no-overshoot; per-end FLAT/CONTINUE_SLOPE/RAISE
   slice:  l0-numerics (Topic 0 gate S17)

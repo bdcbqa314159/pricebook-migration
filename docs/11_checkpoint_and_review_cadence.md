@@ -108,3 +108,17 @@ mined to empty, realigned, oracle-gated. Drawdown % is the honest progress bar.
   green-oracle gate retroactively.
 - The **spine amendments** (A1–A6…) are the output of the "reshape" step — this cadence is how
   they keep getting made deliberately instead of discovered late.
+
+---
+
+## Oracle-quality audit — added line (2026-10-26 — ruling: `handoffs/rulings_floor_rule.md`)
+
+The oracle-quality audit (first of the four review inputs) gains:
+
+> **Confirm every gate asserts a floor on what it collected or resolved, not merely that it ran
+> green.** For each gate, name the population it examined and the floor it held that population to.
+> A gate that reports "ok" without a count or a dereference is a proxy, and a proxy that can pass
+> while its target is empty, truncated, or dangling is not a gate (CLAUDE.md §6, the floor rule).
+
+Precedent for why this is a standing checkpoint question rather than a one-off fix: three instances
+of the same shape reached ratification unnoticed — audit #10, `--layer 0`, `provenance`.

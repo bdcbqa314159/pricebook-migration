@@ -11,7 +11,7 @@ Two conventions need context, passed explicitly (no hidden defaults):
     quarry silently defaulted to São Paulo).
 
 Provenance:
-  quarry: quarry/pricebook/core/day_count.py
+  quarry: quarry/parked/topic-00-foundation/day_count.py
   source: ISDA 2006 §4.16; ICMA Rule 251; Brazilian BUS/252 (ANBIMA)
   oracle: ISDA §4.16 worked examples; ICMA Rule 251 (UST coupon = exactly 2.0000);
           30U/360 February edge cases; ACT/365L / NL/365 leap-day handling

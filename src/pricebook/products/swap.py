@@ -7,7 +7,7 @@ can't see (CLAUDE.md §3b). The float leg's projection index arrives with multic
 its second (projection) curve is the consumer that earns it (rule of two).
 
 Provenance:
-  quarry: quarry/pricebook/fixed_income/interest_rate_swap.py
+  quarry: quarry/pricebook/fixed_income/swap.py
   source: docs/18 (T1 linear products); CLAUDE.md §2 (products are pure data)
   oracle: EURIBOR par swap reprices to zero NPV dual-curve through the L4 engine
   slice:  dual-curve-euribor-estr (T1 slice 2); float leg gained its index here

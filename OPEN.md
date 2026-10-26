@@ -14,9 +14,44 @@
 
 ---
 
+## The quarry no longer imports (found 2026-10-26, slice B audit)
+
+**NG-DEFER-QUARRYIMPORT — `import pricebook.*` from `quarry/` raises `ModuleNotFoundError`.**
+`quarry/pricebook/core/__init__.py` imports `pricebook.core.discount_curve`, which was **physically
+parked** to `quarry/parked/topic-01-yield-curve/discount_curve.py` at the T1 close (doc 13 parking is
+a `git mv`, so the package's own `__init__` was left dangling).
+
+**Consequence:** §7c's *"full sweep + quarry regression nightly"* is currently impossible, and a
+quarry module's behaviour cannot be checked by execution — only by reading it, or by replicating its
+arithmetic against ng (§7bb's cross-check technique, which is what the slice-B audit did to verify
+F7 and F9).
+
+**Not caused by the restart** (artifact 23): the parking events predate it, and A1 proved every
+quarry file crossed byte-identically. Independent of NG-DEFER-PROV, though both are consequences of
+the same parking mechanism going unverified.
+
+**Why it is deferred, not fixed now:** the honest fix is a decision, not a patch — either parking
+also prunes the `__init__` re-exports it orphans (changing the "quarry is read-only" rule, §4), or
+the quarry is accepted as read-only-by-reading and §7c's nightly quarry regression is struck as
+unachievable. That is Cowork's to rule.
+
+**Re-open trigger:** the first slice that needs to execute quarry code to establish an oracle, **or**
+any attempt to stand up the §7c nightly sweep — whichever is first.
+
 ## Provenance-path drift — the `quarry:` headers were never validated (found 2026-10-25, artifact 23)
 
-**NG-DEFER-PROV — 17 of 45 `quarry:` provenance paths in `src/pricebook/` do not resolve.** Found by
+**NG-DEFER-PROV — DISCHARGED 2026-10-26 (floor-rule slice).** All 17 paths now resolve and
+`verify.py provenance` asserts resolution, so the condition cannot recur silently. Authority:
+`docs/handoffs/rulings_floor_rule.md` (CLAUDE.md §6 floor rule, second face —
+*resolve-don't-just-exist*), not Code's judgement. Fixes: 10 repointed under
+`quarry/parked/topic-*/` (physically parked at a topic close); 2 wrong sub-directories corrected
+(`pricing/registry.py`→`registry.py`, `models/vol_surface.py`→`options/vol_surface.py`); 2 naming a
+file that never existed (`fixed_income/interest_rate_swap.py`→`fixed_income/swap.py`); and
+`risk/priceable.py` has **no** quarry ancestor at all — `Priceable` is an ng design construct
+(§1) — so it now reads `quarry: —`. The gate additionally RED-fails if it examines an empty
+population. Original finding below, kept for the record.
+
+**NG-DEFER-PROV (original) — 17 of 45 `quarry:` provenance paths in `src/pricebook/` do not resolve.** Found by
 artifact 23's A5 check, which proved **0 were broken by the `python/` → `quarry/` rewrite** — every
 one was already dangling. `verify.py provenance` passes because it asserts the four lines *exist*,
 never that the path *resolves*: a filter with no floor, the same shape as the `--layer 0` test gate

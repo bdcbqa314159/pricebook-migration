@@ -125,3 +125,26 @@ ever needed, it's one more function then — not a plugin API now.
    gate, full sweep nightly / at layer checkpoints.
 4. **Pre-commit stays surgical** (ruff E3 auto-fix only); heavy checks run in CI, never
    grown into a second CI on every keystroke.
+
+---
+
+## Provenance must RESOLVE, not merely exist (amended 2026-10-26 — ruling: `handoffs/rulings_floor_rule.md`)
+
+`verify.py provenance` asserts the four header lines are present **and that every `quarry:` path
+dereferences** to a file or directory that exists. A `quarry:` value of `—` (no ancestor) is
+explicit and accepted; a path that names nothing is RED.
+
+**Why:** asserting the lines exist is a proxy that passed while **17 of 45 paths dangled** — and two
+had been wrong since the day they were written, so the BAR item was nominally enforced and never
+actually checked. This is the floor rule's second face, *resolve-don't-just-exist* (CLAUDE.md §6).
+
+Three failure modes were found and fixed when the assertion landed:
+
+| mode | count | fix |
+|---|---|---|
+| module physically parked at a topic close (doc 13 parking is a `git mv`), header kept the pre-parking path | 10 | repointed under `quarry/parked/topic-*/` |
+| wrong sub-directory, wrong since written | 2 | `pricing/registry.py`→`registry.py`; `models/vol_surface.py`→`options/vol_surface.py` |
+| named a file that never existed | 2 | `fixed_income/interest_rate_swap.py`→`fixed_income/swap.py`; `risk/priceable.py` has **no** quarry ancestor (`Priceable` is an ng construct, §1) → `quarry: —` |
+
+The check also asserts a non-empty population: if **no** `quarry:` path is examined at all, that is
+RED too — the first face applied to this gate.

@@ -113,7 +113,7 @@ pricing logic changes, no design decision is reopened, no number moves.
 |----|--------|---------------|------|
 | A1 | pass | 2157 / 2157 accounted · **0 unexplained** | 2035 byte-identical · 111 differ only by the path rewrites (each re-derived from the legacy blob by applying the substitutions) · 8 deliberate edits · 3 dropped. 0 missing, 0 extra. |
 | A2 | pass | **366 passed, 0 failed** vs baseline 366 | `pytest tests -q`, 1.24s |
-| A3 | pass | `verify.py tests` collects **366 across 6 layer dirs** (was 177 across 1) | **189 tests newly gated.** Fixed by making `--layer` optional and discovering `tests/L*` — a hardcoded ceiling is the bug, not the value `0` |
+| A3 | pass | `verify.py tests` collects **366 across 6 layer dirs** (was 177 across 1) | **189 tests newly gated.** Fixed by making `--layer` optional and discovering `tests/L*` — a hardcoded ceiling is the bug, not the value `0`. **Re-anchored 2026-10-26:** this count was written on Code's authority; it now derives from CLAUDE.md §6's floor rule (ruling `handoffs/rulings_floor_rule.md`) and is enforced as `verify.py`'s committed `TEST_FLOOR`, RED below — not a number in a table |
 | A4 | pass | **ubuntu-latest: success · windows-latest: success** | run on `944063f`; deps matched the CI pins (numpy 2.4.3 / scipy 1.17.1) locally beforehand, so the first push was predictable |
 | A5 | pass | **0 broken by the rewrite** (17 of 45 already dangling before it) | pre-existing drift logged as `OPEN.md` **NG-DEFER-PROV**, not fixed here — three distinct failure modes make it its own slice |
 | A6 | pass | **4 / 4** refs resolve from the archived repo | `refs/pull/{1,75,150,151}/head` → `57fde59f` `0418d137` `bcd4eeda` `49dd2921`; 150's tip is the slice-25 RED→GREEN sequence |
@@ -149,3 +149,11 @@ sequences reachable on `refs/pull/<N>/head`.
 paths do not resolve, *none* broken by this artifact's rewrite. `verify.py provenance` checks the
 four lines exist, never that the path resolves. Three distinct failure modes (parked-move,
 wrong-subdirectory-from-birth, file-exists-nowhere) make it its own slice with its own oracle.
+
+## Re-anchoring (2026-10-26)
+
+A3's count stood on Code's authority when this artifact landed, and `0002` asked whether it should.
+Cowork ruled it should not: `handoffs/rulings_floor_rule.md` amends CLAUDE.md §6 so the floor rule
+binds the verification apparatus, and A3's count is now the law's `TEST_FLOOR`, asserted by
+`verify.py tests` with CI RED below it. The criterion is unchanged; its *authority* moved from
+judgement to law.
