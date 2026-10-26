@@ -11,6 +11,62 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.114.0] - 2026-10-26
+
+**Swaption vol-cube calibration (T1 slice B) — `options/swaption_vol_cube.py` retired. Drawdown
+22 → 23 / 793.** Spec + rulings: `docs/handoffs/spec_slice_B_swaption_cube.md` (Cowork, B1–B4).
+
+### Added — `calibration/swaption_cube.py`
+- **`build_swaption_vol_cube`** fits a SABR smile at every quoted node by composing the SAME
+  `calibrate_sabr_smile` (slice 21's bounded LS + 1bp gate) — no new fitting machinery. It returns
+  the outcome for **every quoted node**, keyed `(SwaptionSurfaceKey, expiry)`: successes as
+  `(SabrParams, CalibrationResult)`, failures as that node's `CalibrationFailure` carrying residuals.
+- **The silent drop is structurally impossible, not merely tested against.** The quarry wrapped each
+  node's fit in `except Exception: pass`, so a quoted node that failed to calibrate vanished — and an
+  all-failing grid produced an empty-smile cube that repriced its own ATM backbone perfectly, which
+  no self-consistency oracle can see. The map is keyed by the quoted grid, so a vanished node cannot
+  be represented (ruling B1 — §6's floor rule on this slice's own grid).
+- **Counts derived, never stored.** `calibrated_count()` reads the map; a stored count is itself the
+  proxy §6's second clause forbids, since it can drift from the collection it summarises.
+- An **empty** quote grid is a `CalibrationFailure`, not an empty cube (floor-on-population).
+- `swaption_cube()` derives `{SwaptionSurfaceKey → SabrSurface}` — the shape `SABRModel.swaption_vol`
+  already reads — from the successes. β is an explicit input with **no default** (invariant 5).
+
+### Changed — ML-D1's FIT-side instance closes (ruling B4)
+- **`SmileQuote` gains a required `forward`** (3 → 4 fields). Slice A threaded the forward through the
+  **read**; `calibrate_sabr_smile` still reconstructed its own from `index.canonical_accrual` — the
+  single-period *caplet* forward, correct for a caplet and **wrong for a swaption node**, whose
+  forward is `S = float_leg_pv/rpv01`. Composing it unchanged would have reintroduced ML-D1 per node,
+  in a grid, one slice after the read side closed it. A smile *is* quoted at a forward, so it travels
+  **with** the smile for the same reason `law` travels with `SabrSurface.params`.
+- **The `canonical_accrual` reconstruction is DELETED.** Each consumer supplies its own product's
+  forward: the cube passes the node's marked S, `calibrate_capfloor_sabr` passes the caplet forward it
+  reconstructed before — **byte-identical, verified exactly** (full-precision `repr` of α/β/ρ/ν across
+  all four expiries and all 20 residuals: not one ULP moved).
+- **`SabrCalibrationSpec.index` removed** (5 → 4 fields). It existed only to reconstruct the forward;
+  once B4 moved that onto the quote it became accepted-and-ignored, which is worse than absent — a
+  caller could pass the wrong index and nothing would complain.
+- **`verify.py TEST_FLOOR` 366 → 374**, raised in the same commit as the tests it counts. A floor that
+  lags lets shrinkage above the stale value pass unseen.
+
+### Oracles (5, RED before GREEN)
+Node count / no-silent-drop on a **poisoned** grid (a deliberately unfittable node must surface as a
+counted failure) · **S-identity per node on a NON-CANONICAL (semi-annual) underlying** · round-trip ·
+inverter parity (slice 24's law-generic `implied_vol` is composed, not re-derived — its first ng
+consumer) · β explicit. **Oracle 2's non-vacuity is itself verified**: on this grid the engine's S and
+the canonical forward differ by **+6.37 to +6.38bp**, and re-injecting the deleted reconstruction turns
+the oracle RED. On a canonical underlying the two coincide and it would have passed with every node
+mis-fit — which is why the grid is semi-annual.
+
+### Not ported, with evidence
+`bumped()` — added an absolute vol shift to SABR `alpha`, a vol only at β=1; measured **5.43–6.19×**
+over-bump against ng's own `sabr_vol`, strike-dependent, so it tilted the smile its docstring claimed
+to preserve · `_nearest_sabr` (mixed-unit distance, magic tolerance, priced a different node's smile)
+· the ATM fast-path (discontinuous at the money) · the bare fallbacks returning grid-ATM / `0.0` ·
+the ATM-interpolation atom implemented **twice in one file**, the copies returning `0.25` and
+`IndexError` on identical inputs (§3d; rebuilt once in L0 at its first off-pillar consumer, ruling B3).
+
+
 ## [0.113.0] - 2026-10-26
 
 **The floor rule — §6's second clause now binds the verification apparatus** (Cowork ruling:
