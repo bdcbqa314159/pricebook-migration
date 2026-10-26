@@ -333,6 +333,34 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   for shape. `credit/cds.py` (1035 lines) is itself untouched and crosses with slice 2.
   Evidence: `spec_credit_B6_slice1.md` + `CHANGELOG` v0.118.0.
 
+- **B6 credit slice-2 retire read (0 TICKS — two PARTIAL crosses; drawdown unchanged at 25 / 793):**
+  - **`quarry/pricebook/credit/cds.py`** (1035 lines, **20 production importers**) crosses
+    **partially** as ng `products/credit.py` (`CDS`, `PremiumLeg` — pure data) + `engine/credit.py`
+    (`price_cds`). **Superseded:** `protection_leg_pv` / `premium_leg_pv` / `risky_annuity` → the two
+    shared atoms in `market/building_blocks.py` (one definition, composed by both the bootstrap and
+    the engine — §3d); `bootstrap_credit_curve` → `calibration/credit.py` (slice 1);
+    `CDS.pv`/`pv_protection`/`pv_premium`/`pv_ctx` → `price_cds` (products do not price themselves,
+    §2); `CDS.rpv01` → the shared `risky_annuity`. **Resident residual — the quarry `CDS` carries 20
+    methods and ng's product carries none by design**, so most of it is forward-linked, not shed:
+    `par_spread`/`upfront`/`isda_upfront`/`to_upfront` (quote-convention conversions) →
+    **`deferred→` the first upfront-quoted consumer** (and NG-DEFER-CREDITISDA for the ISDA form);
+    `cs01`/`bucket_cs01`/`rec01`/`spread_duration`/`spread_convexity`/`theta` → **L5 credit risk**
+    (ng has the parallel hazard bump only — `bumped`); `carry`/`roll_down` → **credit P&L/carry**;
+    `average_notional`/`_aged_notional` (amortising notional) → **`deferred→` the first
+    variable-notional CDS**; `CDSPnLAttribution` + `cds_pnl_attribution` → **L6 P&L attribution**;
+    `ForwardCDSCurveResult` + `forward_cds_par_spread` + `forward_risky_annuity` → **`deferred→` the
+    forward-CDS product**; `StandardCDS` (+ `from_market`, `upfront_pct`) → **`deferred→` the
+    standard-contract convention consumer**, its `to_dict`/`from_dict` → `deferred→persistence`.
+  - **`quarry/pricebook/core/survival_curve.py` residual SHRINKS but still does not tick.** Slice 1
+    forward-linked nine methods as needed-by-slice-2; two of them landed here —
+    `default_prob` (= 1 − Q) and `conditional_survival` (= Q(t₂)/Q(t₁), the Markov property the
+    protection leg's increments already rely on). **Seven remain:** `forward_hazard`,
+    `forward_survival`, `marginal_default_density` → the first consumer needing forward credit;
+    `term_structure`, `pillar_hazards` → credit reporting; `bumped_at` (single-pillar) → L5 credit
+    key-rate risk; `_sc_to_dict`/`_sc_from_dict` → `deferred→persistence`. Still a partial cross.
+  **No tick on either**: the deletable bar is an *empty* residual, not "looks covered" (§4).
+  Evidence: `spec_credit_slice2.md` + `CHANGELOG` v0.119.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
