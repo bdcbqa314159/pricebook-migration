@@ -19,7 +19,7 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 25 / 793** — **all 25 are TICKED; none is physically moved**
+**Deletable (the §4 drawdown bar): 26 / 793** — **all 26 are TICKED; none is physically moved**
 (park-model amendment, 2026-10-26: a park is a tracker/MANIFEST state, not a `git mv` — CLAUDE.md §4,
 doc 13 §7, ruling `rulings_quarry_park_model.md`). The 19 formerly physically parked at the Topic-0
 (v0.74.0) and Topic-1 (v0.98.0) closes have been **restored to their original quarry paths**: those
@@ -360,6 +360,36 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     key-rate risk; `_sc_to_dict`/`_sc_from_dict` → `deferred→persistence`. Still a partial cross.
   **No tick on either**: the deletable bar is an *empty* residual, not "looks covered" (§4).
   Evidence: `spec_credit_slice2.md` + `CHANGELOG` v0.119.0.
+
+- **B6 credit slice-3 retire read (+1 TICK — `credit/credit_risk.py` DELETABLE, 25 → 26 / 793):**
+  294 lines, 6 production importers. **The decisive evidence is WHO those importers are:** every one
+  of them (`credit/cds.py` ×3, `credit/cds_index_product.py` ×2, `desks/cva_desk.py`,
+  `desks/trs_desk.py`, `core/survival_curve.py` ×2) imports the module's **private**
+  `_bump_survival_curve` / `_bump_survival_curve_at` helpers — **not** its public API. Those two
+  helpers are exactly what ng now supersedes (`SurvivalCurve.bumped`, slice 1; `.bumped_at`, this
+  slice), so the module's load-bearing content has crossed.
+  **Superseded (4 of 6 members):** `cs01` → ng `risk/credit.py::cs01` (parallel hazard bump through
+  `Priceable`+`central_diff`, no `isinstance`); `spread_dv01` ("per-pillar credit spread sensitivity
+  (key-rate CS01)") → ng `bucketed_cs01`, which additionally asserts the decomposition identity the
+  quarry never checked; `_bump_survival_curve` → `SurvivalCurve.bumped`; `_bump_survival_curve_at` →
+  `SurvivalCurve.bumped_at`.
+  **`deferred→` (both CAPABILITIES, not products — §4, so neither blocks the tick):**
+  `jump_to_default` (PV if the name defaults now) → **first JTD consumer**; `CreditPosition` +
+  `CreditBook` (per-name netting, `total_cs01`, `cs01_by_name`, `jtd_by_name`) → **the L6 credit
+  book** (ng has `shell/portfolio.py`/`booking.py` but no credit aggregation).
+  **Why this ticks where `cds.py` did not** — the distinction is *realigned parity*, not the mere
+  presence of deferrals: here ng supersedes 4 of 6 members **and** everything the live importers
+  actually use, whereas `cds.py` keeps 20 methods on one class of which ng supersedes about a third.
+  Same standard as `options/sabr.py` and `options/swaption_vol.py`, which ticked with `deferred→`
+  capabilities outstanding.
+  Evidence: `spec_credit_slice3_risk.md` + `CHANGELOG` v0.120.0.
+
+- **`credit/cds.py` re-assessed (still PARTIAL, no tick):** this slice supersedes three more of its 20
+  methods — `cs01` and `bucket_cs01` → ng `cs01`/`bucketed_cs01`, and its `_bump_survival_curve`
+  imports go with `credit_risk.py`. Residual now ~15 methods: quote conversions
+  (`upfront`/`isda_upfront`/`to_upfront`/`par_spread`), `rec01`, `spread_duration`,
+  `spread_convexity`, `theta`, `carry`, `roll_down`, amortising notional, `CDSPnLAttribution`,
+  forward CDS, `StandardCDS`. Bar still not empty.
 
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
