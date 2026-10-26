@@ -33,10 +33,13 @@ from pricebook.foundation import (
     TenorUnit,
     TimeMeasure,
     build_schedule,
+    currency,
 )
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.building_blocks import protection_leg, risky_annuity
 from pricebook.market.curve import DiscountCurve
+from pricebook.market.curve_set import CurveKey, CurveRole, CurveSet
+from pricebook.market.snapshot import MarketSnapshot, RecoveryKey
 from pricebook.market.survival_curve import SurvivalCurve
 
 Y = TenorUnit.YEAR
@@ -46,6 +49,7 @@ VAL = date(2026, 1, 15)
 TM = TimeMeasure(VAL, DC365)
 FAR = VAL + Tenor(15, Y)
 ACME = ReferenceEntity("ACME")
+EUR = currency("EUR")
 RECOVERY = 0.40
 
 
@@ -119,8 +123,15 @@ def _quotes(spreads: dict[int, float]) -> tuple[CdsParQuote, ...]:
     return tuple(CdsParQuote(VAL + Tenor(y, Y), s) for y, s in sorted(spreads.items()))
 
 
+def _market(r: float = 0.03, recovery: float = RECOVERY) -> MarketSnapshot:
+    """Recovery lives in the snapshot (slice 4, §3c) — the single source the bootstrap and the CDS
+    mark both read, so they cannot use different R's."""
+    curves = CurveSet({CurveKey(CurveRole.DISCOUNT, EUR): _disc(r)})
+    return MarketSnapshot(VAL, curves, scalars={RecoveryKey(ACME): recovery})
+
+
 def _spec(spreads: dict[int, float], r: float = 0.03) -> CreditBootstrapSpec:
-    return CreditBootstrapSpec(ACME, _quotes(spreads), _disc(r), RECOVERY, SolveConfig(tolerance=1e-14))
+    return CreditBootstrapSpec(ACME, EUR, _quotes(spreads), _market(r), SolveConfig(tolerance=1e-14))
 
 
 def test_every_quoted_cds_reprices_to_zero_on_the_bootstrapped_curve() -> None:
@@ -130,8 +141,8 @@ def test_every_quoted_cds_reprices_to_zero_on_the_bootstrapped_curve() -> None:
     curve, _result = out
     for q in spec.quotes:
         sched = build_schedule(VAL, q.maturity, ScheduleTerms(frequency=Frequency.QUARTERLY, roll=RollRule(calendar=None)))
-        prot = protection_leg(Accrual(VAL, q.maturity, DC365), spec.recovery, spec.discount, curve)
-        prem = q.spread * risky_annuity(sched, DC360, spec.discount, curve)
+        prot = protection_leg(Accrual(VAL, q.maturity, DC365), RECOVERY, _disc(), curve)
+        prem = q.spread * risky_annuity(sched, DC360, _disc(), curve)
         assert abs(prot - prem) < 1e-9, (q.maturity, prot, prem)
 
 
@@ -172,11 +183,27 @@ def test_an_empty_quote_set_is_a_failure_not_an_empty_curve() -> None:
 def test_unsorted_or_duplicate_maturities_are_a_failure() -> None:
     dup = (CdsParQuote(VAL + Tenor(3, Y), 0.01), CdsParQuote(VAL + Tenor(3, Y), 0.012))
     out = bootstrap_survival_curve(
-        CreditBootstrapSpec(ACME, dup, _disc(), RECOVERY, SolveConfig(tolerance=1e-14))
+        CreditBootstrapSpec(ACME, EUR, dup, _market(), SolveConfig(tolerance=1e-14))
     )
     assert isinstance(out, CalibrationFailure), out
 
 
-def test_a_recovery_outside_zero_one_is_a_failure() -> None:
-    bad = CreditBootstrapSpec(ACME, _quotes({5: 0.01}), _disc(), 1.5, SolveConfig())
-    assert isinstance(bootstrap_survival_curve(bad), CalibrationFailure)
+def test_a_recovery_outside_zero_one_is_rejected_at_the_snapshot() -> None:
+    """The guard moved WITH the field: recovery is validated where it now lives (slice 4), so an
+    out-of-domain R cannot even be built into a snapshot, let alone reach a bootstrap."""
+    import pytest
+
+    with pytest.raises(ValueError):
+        MarketSnapshot(
+            VAL,
+            CurveSet({CurveKey(CurveRole.DISCOUNT, EUR): _disc()}),
+            scalars={RecoveryKey(ACME): 1.5},
+        )
+
+
+def test_a_missing_recovery_is_a_calibration_failure() -> None:
+    bare = MarketSnapshot(VAL, CurveSet({CurveKey(CurveRole.DISCOUNT, EUR): _disc()}))
+    out = bootstrap_survival_curve(
+        CreditBootstrapSpec(ACME, EUR, _quotes({5: 0.01}), bare, SolveConfig())
+    )
+    assert isinstance(out, CalibrationFailure), out

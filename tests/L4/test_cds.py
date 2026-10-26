@@ -42,7 +42,7 @@ from pricebook.foundation import (
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.curve import DiscountCurve
 from pricebook.market.curve_set import CurveKey, CurveRole, CurveSet
-from pricebook.market.snapshot import MarketSnapshot
+from pricebook.market.snapshot import MarketSnapshot, RecoveryKey
 from pricebook.market.survival_curve import SurvivalCurve
 from pricebook.models.discounting_model import DiscountingModel
 from pricebook.products.credit import CDS, PremiumLeg
@@ -74,7 +74,8 @@ def _model(lam: float, r: float = 0.03) -> DiscountingModel:
             CurveKey(CurveRole.SURVIVAL, ACME): surv,
         }
     )
-    return DiscountingModel(MarketSnapshot(VAL, curves))
+    # recovery is L1 market state since slice 4 — one source for bootstrap and mark alike
+    return DiscountingModel(MarketSnapshot(VAL, curves, scalars={RecoveryKey(ACME): RECOVERY}))
 
 
 def _cds(spread: float, years: int = 5, start: date = VAL) -> CDS:
@@ -82,7 +83,7 @@ def _cds(spread: float, years: int = 5, start: date = VAL) -> CDS:
         start, start + Tenor(years, Y),
         ScheduleTerms(frequency=Frequency.QUARTERLY, roll=RollRule(calendar=None)),
     )
-    return CDS(ACME, PremiumLeg(sched, DC360, spread), RECOVERY, Money(NOTIONAL, _ccy()))
+    return CDS(ACME, PremiumLeg(sched, DC360, spread), Money(NOTIONAL, _ccy()))
 
 
 def _analytic_pv(spread: float, lam: float, r: float, years: int) -> float:
@@ -161,15 +162,21 @@ def test_the_engine_prices_every_bootstrapped_pillar_to_zero() -> None:
     spreads = {1: 0.0080, 3: 0.0105, 5: 0.0130, 7: 0.0150, 10: 0.0165}
     disc = DiscountCurve.flat(TM, 0.03, until=FAR)
     quotes = tuple(CdsParQuote(VAL + Tenor(y, Y), s) for y, s in sorted(spreads.items()))
+    base = MarketSnapshot(
+        VAL, CurveSet({CurveKey(CurveRole.DISCOUNT, _ccy()): disc}),
+        scalars={RecoveryKey(ACME): RECOVERY},
+    )
     out = bootstrap_survival_curve(
-        CreditBootstrapSpec(ACME, quotes, disc, RECOVERY, SolveConfig(tolerance=1e-14))
+        CreditBootstrapSpec(ACME, _ccy(), quotes, base, SolveConfig(tolerance=1e-14))
     )
     assert not isinstance(out, CalibrationFailure), out
     curve, _ = out
     curves = CurveSet(
         {CurveKey(CurveRole.DISCOUNT, _ccy()): disc, CurveKey(CurveRole.SURVIVAL, ACME): curve}
     )
-    model = DiscountingModel(MarketSnapshot(VAL, curves))
+    model = DiscountingModel(
+        MarketSnapshot(VAL, curves, scalars={RecoveryKey(ACME): RECOVERY})
+    )
     for years, spread in sorted(spreads.items()):
         res = price(_cds(spread, years), model, NUMERICS)
         assert isinstance(res, PricingResult), (years, res)
@@ -214,7 +221,10 @@ def test_the_grid_is_the_knob_the_config_says_it_is() -> None:
 def test_a_missing_survival_curve_is_a_failure_not_a_risk_free_mark() -> None:
     disc = DiscountCurve.flat(TM, 0.03, until=FAR)
     model = DiscountingModel(
-        MarketSnapshot(VAL, CurveSet({CurveKey(CurveRole.DISCOUNT, _ccy()): disc}))
+        MarketSnapshot(
+            VAL, CurveSet({CurveKey(CurveRole.DISCOUNT, _ccy()): disc}),
+            scalars={RecoveryKey(ACME): RECOVERY},
+        )
     )
     out = price(_cds(0.0200), model, NUMERICS)
     assert isinstance(out, PricingFailure), out
@@ -235,9 +245,8 @@ def test_cds_validates_its_shape() -> None:
         ScheduleTerms(frequency=Frequency.QUARTERLY, roll=RollRule(calendar=None)),
     )
     with pytest.raises(ValueError):
-        CDS(ACME, PremiumLeg(sched, DC360, 0.01), 1.5, Money(NOTIONAL, _ccy()))   # recovery ≥ 1
-    with pytest.raises(ValueError):
-        CDS(ACME, PremiumLeg(sched, DC360, -0.01), 0.4, Money(NOTIONAL, _ccy()))  # negative spread
+        CDS(ACME, PremiumLeg(sched, DC360, -0.01), Money(NOTIONAL, _ccy()))  # negative spread
+    # the recovery guard moved WITH the field — it is validated at the snapshot now (slice 4)
 
 
 # ── default_prob + the conditional reads forward-linked from slice 1 (needed-now here) ─────

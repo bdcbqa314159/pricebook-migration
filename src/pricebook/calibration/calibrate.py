@@ -48,7 +48,7 @@ from pricebook.market.curve import CurveHandle, DiscountCurve
 from pricebook.market.survival_curve import SurvivalHandle
 from pricebook.market.curve_set import CurveKey, CurveRole, CurveSet
 from pricebook.market.quotes import DepositQuote, FRAQuote, FutureQuote, ParSwapQuote
-from pricebook.market.snapshot import MarketSnapshot, ScalarKey
+from pricebook.market.snapshot import MarketSnapshot, RecoveryKey, ScalarKey
 from pricebook.models.discounting_model import DiscountingModel
 from pricebook.products.cash import FRA, Deposit, Future
 from pricebook.products.swap import FixedLeg, FloatLeg, VanillaSwap, XccyBasisSwap
@@ -662,7 +662,10 @@ def calibrate(
         merged[CurveKey(CurveRole.DISCOUNT, spec.xccy.currency, spec.xccy.collateral)] = xccy_curve
         residuals.extend(xccy_residuals)
         converged = converged and all(abs(r) < spec.solve.tolerance for r in xccy_residuals)
-    snapshot = MarketSnapshot(spec.valuation_date, CurveSet(merged), scalars=dict(spec.fx))
+    # annotated because `Mapping` is invariant in its key type: a plain `dict(spec.fx)` is
+    # `dict[ScalarKey, float]` and will not widen to the snapshot's `ScalarKey | RecoveryKey`
+    scalars: dict[ScalarKey | RecoveryKey, float] = {k: v for k, v in spec.fx.items()}
+    snapshot = MarketSnapshot(spec.valuation_date, CurveSet(merged), scalars=scalars)
     return DiscountingModel(snapshot), CalibrationResult(
         tuple(residuals), converged=converged, jacobian=jacobian
     )

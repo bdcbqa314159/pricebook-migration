@@ -42,18 +42,19 @@ class CDS:
     """A vanilla single-name CDS on `entity`. `notional` is signed: **positive = bought
     protection** (pay the premium, receive `(1−R)·N` on default), negative = sold.
 
-    `recovery` is contractual here, not market state: this is the R the *contract* assumes for its
-    mark. (The market-implied recovery a curve was bootstrapped under lives with the calibration —
-    a basis between them is a real trade and arrives with its consumer.)"""
+    **There is no `recovery` field.** It lived here until slice 4 and that was a mis-layering:
+    §3c puts recovery at **L1** ("risk bumps them"), and keeping a copy on the contract meant a mark
+    could use a different R from the one its curve was bootstrapped under — a par quote then priced
+    to ≈96bp of notional, silently. The single R lives in `snapshot.scalars[RecoveryKey(entity)]`
+    and both the bootstrap and the mark read it. (A genuinely *fixed-recovery* CDS, where R is a
+    contractual term rather than a market assumption, is a different product and brings its own L2
+    term when it arrives — §6b.)"""
 
     entity: ReferenceEntity
     premium: PremiumLeg
-    recovery: float
     notional: Money
 
     def __post_init__(self) -> None:
-        if not 0.0 <= self.recovery < 1.0:
-            raise ValueError(f"CDS recovery must be in [0, 1); got {self.recovery}")
         if self.premium.spread < 0.0:
             raise ValueError(f"CDS spread must be non-negative; got {self.premium.spread}")
         if not self.premium.schedule.periods:

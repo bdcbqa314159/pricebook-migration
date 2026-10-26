@@ -33,7 +33,8 @@ from pricebook.foundation.results import PricingFailure
 from pricebook.market.curve_set import CurveKey
 from pricebook.market.snapshot import MarketSnapshot
 from pricebook.market.survival_curve import SurvivalHandle
-from pricebook.risk.bump import SurvivalBump, SurvivalPillarBump
+from pricebook.foundation.reference_entity import ReferenceEntity
+from pricebook.risk.bump import RecoveryBump, SurvivalBump, SurvivalPillarBump
 from pricebook.risk.greeks import central_diff
 from pricebook.risk.priceable import Priceable
 
@@ -81,3 +82,19 @@ def bucketed_cs01(
             return out
         buckets.append(out * shift)
     return tuple(buckets)
+
+
+def rec01(
+    p: Priceable, market: MarketSnapshot, entity: ReferenceEntity, shift: float = _BP
+) -> float | PricingFailure:
+    """Recovery sensitivity: the PV change for a `shift` (default 1bp) move in the entity's recovery
+    rate. **Negative for bought protection** — a higher recovery means less is paid out on default.
+
+    The protection leg is linear in `(1−R)` and the premium leg does not involve R at all, so the
+    analytic derivative is exactly `−protection/(1−R)` and rec01 is **independent of the contract
+    spread**. That independence is itself an oracle: if rec01 varied with the spread, R would be
+    leaking into the annuity."""
+    out = central_diff(p, market, RecoveryBump(entity), shift)
+    if isinstance(out, PricingFailure):
+        return out
+    return out * shift

@@ -56,6 +56,7 @@ def price_cds(
     try:
         discount = model.market.curves.discount(currency)
         survival = model.market.curves.survival(cds.entity)
+        recovery = model.market.recovery(cds.entity)  # the ONE R; the bootstrap read the same
     except (KeyError, ValueError, NotImplementedError) as exc:
         return PricingFailure(f"CDS mark: {exc}")
 
@@ -75,7 +76,7 @@ def price_cds(
     try:
         protection = protection_leg(
             Accrual(protection_start, maturity, basis),
-            cds.recovery,
+            recovery,
             discount,
             survival,
             numerics.steps_per_year,

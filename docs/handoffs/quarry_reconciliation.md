@@ -391,6 +391,21 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   `spread_convexity`, `theta`, `carry`, `roll_down`, amortising notional, `CDSPnLAttribution`,
   forward CDS, `StandardCDS`. Bar still not empty.
 
+- **B6 credit slice-4 (0 TICKS — a §3d-correcting refactor + one capability; 26 / 793 unchanged):**
+  recovery moved from **two** ng homes (`products/credit.py` and the bootstrap spec) to **one**:
+  `snapshot.scalars[RecoveryKey(entity)]`, per §3c (*"hazard/survival curve and recovery → L1 (risk
+  bumps them)"*). **Measured before the move:** with the curve bootstrapped at R=0.40 and the CDS
+  marked at R=0.30, a **par** quote priced to **+96,431 on 10mm** (≈96bp of notional), silently —
+  the day-count divergence's twin, and now unrepresentable rather than merely untested.
+  `rec01` lands as an ordinary `RecoveryBump`, which is only possible *because* recovery is snapshot
+  state: as a product field it would have needed a second instrument-mutating bump mechanism beside
+  the snapshot one, and a type-switch to choose (§1). `credit/cds.py`'s `rec01` is therefore now
+  superseded too — residual ~14 methods, still not empty, still no tick.
+  **Byte-identical guard:** full-precision `repr` of 5 CDS PVs, the seasoned pv+accrued, `cs01`, all
+  5 buckets and all 6 bootstrapped survivals, captured before and compared after — **not one ULP
+  moved**. A re-layering that changed a number would have been a different change.
+  Evidence: `spec_credit_slice4_recovery.md` + `CHANGELOG` v0.121.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
