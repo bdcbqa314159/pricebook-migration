@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol, runtime_checkable
 
+from pricebook.foundation.day_count import DayCountConvention
 from pricebook.foundation.time_measure import TimeMeasure
 
 
@@ -53,6 +54,9 @@ class SurvivalHandle(Protocol):
 
     @property
     def hazard_segments(self) -> int: ...
+
+    @property
+    def time_basis(self) -> DayCountConvention: ...
 
 
 @dataclass(frozen=True)
@@ -166,6 +170,16 @@ class SurvivalCurve:
             moved = lam + shift if i == pillar else lam
             out.append(out[-1] * math.exp(-max(moved, 0.0) * dt))
         return SurvivalCurve(self.measure, self.times, tuple(out))
+
+    @property
+    def time_basis(self) -> DayCountConvention:
+        """The day count the curve measures time in — the basis any integral **against** this curve
+        must discretise on. Exposed on the capability so `protection_leg` can take it from the curve
+        rather than from a caller-supplied `Accrual`: passing the premium's ACT/360 where the curve's
+        ACT/365F belonged changed the step count and made the bootstrap's own par CDS mark non-zero
+        (slice 2, divergence ①). The caller can no longer choose wrongly because it no longer
+        chooses."""
+        return self.measure.day_count
 
     @property
     def hazard_segments(self) -> int:

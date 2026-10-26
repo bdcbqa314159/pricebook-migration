@@ -25,7 +25,7 @@ from pricebook.foundation.numerics import IntegrationConfig
 from pricebook.foundation.results import PricingFailure, PricingResult
 from pricebook.foundation.schedule import future_periods
 from pricebook.engine.registry import register
-from pricebook.market.building_blocks import protection_leg, risky_annuity
+from pricebook.market.building_blocks import ProtectionWindow, protection_leg, risky_annuity
 from pricebook.models.protocols import CalibratedModel
 from pricebook.products.credit import CDS
 
@@ -67,15 +67,12 @@ def price_cds(
     # protection runs from today (or inception, if forward-starting) to maturity: the buyer is
     # protected over the REMAINING life only — invariant 6 applied to the contingent leg
     protection_start = max(vd, schedule.periods[0].accrual_start)
-    # The protection window's day count is the TIME BASIS of the integration grid, not an accrual
-    # convention — so it must be the survival curve's own measure, which is what the slice-1
-    # bootstrap integrates over. Taking `cds.premium.day_count` here instead (ACT/360 against the
-    # curve's ACT/365F) changes the step count and makes the bootstrap's par CDS mark non-zero:
-    # the §3d divergence this slice exists to prevent, caught by the par-to-zero oracle.
-    basis = getattr(getattr(survival, "measure", None), "day_count", cds.premium.day_count)
     try:
+        # a ProtectionWindow carries only the two dates — the integration basis comes from the
+        # survival curve itself, so divergence ① (the premium's ACT/360 against the curve's
+        # ACT/365F) is now unwritable rather than merely guarded
         protection = protection_leg(
-            Accrual(protection_start, maturity, basis),
+            ProtectionWindow(protection_start, maturity),
             recovery,
             discount,
             survival,

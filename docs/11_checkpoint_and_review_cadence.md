@@ -122,3 +122,25 @@ The oracle-quality audit (first of the four review inputs) gains:
 
 Precedent for why this is a standing checkpoint question rather than a one-off fix: three instances
 of the same shape reached ratification unnoticed — audit #10, `--layer 0`, `provenance`.
+
+---
+
+## Oracle-quality audit — second added line (2026-10-26 — ruling: `handoffs/rulings_CP_credit_vertical.md`)
+
+A **third structural face**, beside the count and the finer-grid/parity cross-check:
+
+> **Single-source / bump consistency.** For any market input a model both *fits* and *prices* with,
+> **bumping it at its snapshot home must preserve reprice-to-par.** A second copy of that input fails
+> the check by construction: the bump moves the snapshot's copy, the pricer reads the other one, and
+> par breaks. Ask it of every input that appears in both a calibration and a mark.
+
+**Why it is a standing question and not a one-off fix.** The law already said *"if risk bumps it, it
+lives in the snapshot"* and *market is reached through the model* — and recovery still ended up in two
+homes (the L2 product and the bootstrap spec) for two slices, where a curve fitted at R=0.40 and a CDS
+marked at R=0.30 priced a **par** quote to ≈96bp of notional, silently. **No existing gate shape could
+see it:** it is not a truncated population (so not a count) and not a coarse grid (so not a
+finer-grid check) — "the same quantity in two places" has no floor to assert. It was caught by a human
+reading a checkpoint report, which is exactly the kind of catch a gate should be making instead.
+
+Promotion to CLAUDE.md §6 on a second instance (the floor rule's own precedent: audit #10 stood alone
+until `--layer 0` and `provenance` made it three).

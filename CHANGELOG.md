@@ -11,6 +11,63 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.122.0] - 2026-10-26
+
+**Vanilla credit COMPLETE — jump-to-default, the `protection_leg` signature fix, and Cowork's
+bump-consistency gate.** Ruling: `docs/handoffs/rulings_CP_credit_vertical.md` §5 (thread 0029/0030).
+**441 tests** (was 430). Drawdown unchanged at 26 / 793.
+
+### Added — `jump_to_default`, the defining credit risk
+`JTD = (1−R)·N − accrued_owed − PV`. **Not a derivative** — default is a discrete event, so there is
+no bump and no finite difference. The `accrued` the mark already reports is the owed amount (negative
+for bought protection, invariant 6), which is why it adds. A book can be CS01-flat while carrying a
+large jump, which is why CS01 alone was never the whole credit risk.
+
+Oracled on the identity itself at three spreads, on the **relationship** (a CDS already marked up has
+less left to jump — `j0 < j1 < j2` as `pv0 > pv1 > pv2`, with the differences equal), on monotonicity
+in recovery, on sign-flip with the notional, and on the seasoned case where the accrued subtracts.
+
+### Fixed — divergence ① is now unwritable, not merely guarded
+**`protection_leg` takes a `ProtectionWindow(start, end)`**, not an `Accrual`. An `Accrual` carries a
+`day_count`, and for this leg a day count was never an accrual convention — only the basis the
+integral discretises on. Passing the premium's ACT/360 where the curve's ACT/365F belonged changed the
+step count and made the bootstrap's own par CDS mark non-zero (slice 2). The basis now comes from the
+curve being integrated against, via a new `SurvivalHandle.time_basis`: **the caller cannot choose
+wrongly because it no longer chooses.** A test asserts the signature carries no day count at all.
+
+### Added — doc 11 gains the bump-consistency gate (a third structural face)
+> For any market input a model both fits and prices with, **bumping it at its snapshot home must
+> preserve reprice-to-par.**
+
+Cowork derived this from the two-R bug, and it is the gate shape I had looked for and failed to find.
+A second copy of a shared input fails it by construction: the bump moves the snapshot's copy, the
+pricer reads the other, par breaks. It is neither a count nor a finer-grid check — "the same quantity
+in two places" has no population to floor — which is why no existing gate could see a defect that
+cost ≈96bp on a par quote. Asserted here for **both** shared credit inputs (recovery across five
+shifts, and the hazard curve). CLAUDE.md §6 promotion on a second instance.
+
+### Corrected — checkpoint finding O1 was wrong
+`CP_credit_vertical.md` §1 claimed the survival curve had no interpolation oracle. **It has had one
+since slice 1:** `test_piecewise_constant_hazard_between_pillars_is_log_linear_in_Q` builds a
+non-flat two-segment curve and checks an analytic intermediate `Q` strictly inside a segment. It
+discriminates against the wrong scheme by **1.66e-3** at a 1e-10 tolerance, so it is a genuine rung-1
+oracle, not a tautology. The finding came from under-auditing the test file while writing the
+checkpoint — recorded rather than quietly dropped, since an audit that invents findings is as costly
+as one that misses them. `NG-DEFER-SURVIVALINTERP` is therefore **not** ledgered.
+
+Two genuine (modest) strengthenings did land: the first segment is now covered as well as the second,
+and a **three**-segment curve is probed in its middle segment, where a whole-curve interpolation
+would differ — asserted to differ, so the test cannot pass vacuously.
+
+### Challenge-me rulings applied
+`PremiumLeg`/`FixedLeg` stay separate (DRY is about knowledge; the shared loop is already the
+`risky_annuity` atom) · flat `RecoveryKey → float` stays (term recovery arrives as a `curves` entry
+under the same key, no break) · the `IntegrationConfig` arity dispatch stays (numerics on the model
+would violate invariant 5) · the credit book defers to B8/L6 (a general book pattern, not
+credit-specific).
+
+`TEST_FLOOR` 430 → 441.
+
 ## [0.121.0] - 2026-10-26
 
 **B6 credit slice 4 — recovery becomes L1 market state; `rec01`.** Spec:

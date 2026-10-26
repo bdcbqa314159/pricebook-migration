@@ -135,3 +135,41 @@ def test_an_unknown_entity_raises_rather_than_returning_a_default() -> None:
 def test_a_survival_curve_does_not_masquerade_as_a_discount_curve() -> None:
     """Distinct capability, distinct key — a survival curve has no `df`."""
     assert not hasattr(_flat(0.02), "df")
+
+
+# ── O1 follow-up: the interpolation oracle existed since slice 1 (above); these STRENGTHEN it ──
+def test_log_linear_interpolation_holds_in_the_FIRST_segment_too() -> None:
+    """The slice-1 oracle probed the second segment. A scheme that interpolated across the whole
+    curve rather than per-segment would match there but not here, so the first segment is a
+    genuinely distinct case."""
+    t1, t2 = 2.0, 5.0
+    lam1, lam2 = 0.01, 0.04
+    q1 = math.exp(-lam1 * t1)
+    q2 = q1 * math.exp(-lam2 * (t2 - t1))
+    curve = SurvivalCurve(TM, (0.0, t1, t2), (1.0, q1, q2))
+    d = VAL + Tenor(12, TenorUnit.MONTH)  # t ≈ 1.0, inside the FIRST segment
+    t = TM.year_fraction(d)
+    assert abs(curve.survival(d) - math.exp(-lam1 * t)) < 1e-12
+    assert abs(curve.hazard(d) - lam1) < 1e-9
+
+
+def test_a_three_segment_curve_interpolates_PER_SEGMENT_not_across_the_curve() -> None:
+    """Three hazards, probed in the middle one. A whole-curve interpolation (log-linear from the
+    first pillar to the last) would give a different number here — which is what makes this an
+    oracle rather than a restatement of the construction."""
+    ts = (1.0, 3.0, 7.0)
+    lams = (0.005, 0.030, 0.012)
+    qs = [1.0]
+    prev_t = 0.0
+    for t, lam in zip(ts, lams):
+        qs.append(qs[-1] * math.exp(-lam * (t - prev_t)))
+        prev_t = t
+    curve = SurvivalCurve(TM, (0.0, *ts), tuple(qs))
+
+    d = VAL + Tenor(24, TenorUnit.MONTH)  # t ≈ 2.0, inside the SECOND segment
+    t = TM.year_fraction(d)
+    expected = qs[1] * math.exp(-lams[1] * (t - ts[0]))
+    whole_curve = math.exp(math.log(1.0) + (math.log(qs[-1]) - math.log(1.0)) * t / ts[-1])
+    assert abs(expected - whole_curve) > 1e-3, "the two schemes must differ or this proves nothing"
+    assert abs(curve.survival(d) - expected) < 1e-12
+    assert abs(curve.hazard(d) - lams[1]) < 1e-9

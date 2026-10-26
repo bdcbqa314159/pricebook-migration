@@ -43,7 +43,7 @@ from pricebook.foundation import (
 from pricebook.foundation.money import Currency
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.foundation.solvers import invert_increasing
-from pricebook.market.building_blocks import protection_leg, risky_annuity
+from pricebook.market.building_blocks import ProtectionWindow, protection_leg, risky_annuity
 from pricebook.market.snapshot import MarketSnapshot
 from pricebook.market.survival_curve import SurvivalCurve
 
@@ -119,13 +119,13 @@ def bootstrap_survival_curve(
             valuation, q.maturity,
             ScheduleTerms(frequency=_PREMIUM_FREQUENCY, roll=RollRule(calendar=None)),
         )
-        accrual = Accrual(valuation, q.maturity, measure.day_count)
+        window = ProtectionWindow(valuation, q.maturity)
 
-        def value(q_pillar: float, _t: float = t, _q: CdsParQuote = q, _s=schedule, _a=accrual) -> float:
+        def value(q_pillar: float, _t: float = t, _q: CdsParQuote = q, _s=schedule, _w=window) -> float:
             """CDS value at the trial pillar. Increasing in `−log Q`, so the solve is monotone:
             a lower Q means more default probability, so more protection and less premium."""
             trial = SurvivalCurve(measure, (*times, _t), (*survivals, q_pillar))
-            prot = protection_leg(_a, recovery, discount, trial)
+            prot = protection_leg(_w, recovery, discount, trial)
             prem = _q.spread * risky_annuity(_s, _PREMIUM_DAY_COUNT, discount, trial)
             return prot - prem
 
