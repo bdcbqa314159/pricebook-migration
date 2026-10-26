@@ -57,12 +57,16 @@ _MIN_SMILE_POINTS = 3  # (α, ρ, ν) — the same minimum `SmileQuote` enforces
 
 @dataclass(frozen=True)
 class SabrCalibrationSpec:
-    """What to fit: the `model` carrying the projection curve AND the vol law (its F and its law are
-    what `SABRModel.implied_vol` reads — §3d), the `index` the smile is quoted on, the single-expiry
-    `smile`, the FIXED `beta`, and the `solve` config (tolerance / iteration cap, reused verbatim)."""
+    """What to fit: the `model` carrying the vol law the fit must speak (§3d — the fit cannot be in
+    other units than the pricer reads), the single-expiry `smile` (which carries its own `forward`,
+    ruling B4), the FIXED `beta`, and the `solve` config (tolerance / iteration cap, reused verbatim).
+
+    **No `index`.** It was here only to reconstruct the forward from `canonical_accrual`; B4 moved the
+    forward onto the quote, so the field became accepted-and-ignored — which is worse than absent: a
+    caller could pass the wrong index and nothing would complain. The smile's forward is now the one
+    source."""
 
     model: ImpliedVol
-    index: RateIndex
     smile: SmileQuote
     beta: float
     solve: SolveConfig = field(default_factory=SolveConfig)
@@ -76,13 +80,13 @@ def calibrate_sabr_smile(
     non-convergence."""
     market = spec.model.market
     law = spec.model.vol_law  # the SAME law the model prices in — the fit can't be in other units
-    index, smile, beta = spec.index, spec.smile, spec.beta
-    # F via the SAME atoms SABRModel.implied_vol composes (§3d — ONE canonical accrual, no drift)
-    accrual = index.canonical_accrual(smile.expiry)
-    try:
-        fwd = forward(market.curves.projection(index), accrual)
-    except (ValueError, KeyError, ZeroDivisionError) as exc:
-        return CalibrationFailure(str(exc))
+    smile, beta = spec.smile, spec.beta
+    # The forward comes FROM THE QUOTE (ruling B4). The canonical-accrual reconstruction that stood
+    # here fitted every smile at the single-period CAPLET forward — right for a caplet, wrong by
+    # 48.8bp for a swaption node, whose forward is `float_leg_pv/rpv01`. Slice A threaded the READ;
+    # this is the same thread on the FIT, so fit and read compose the SAME forward by construction
+    # rather than by a guard (§3d, ruling A finished). Each consumer passes its own product's forward.
+    fwd = smile.forward
     if any(not law.defined(fwd, k) for k in smile.strikes):  # the LAW's domain (cf. caplet #15)
         return CalibrationFailure(
             f"forward {fwd} / smile strikes outside the {type(law).__name__} law's domain"
@@ -181,12 +185,21 @@ def calibrate_capfloor_sabr(
 
     params: dict[date, SabrParams] = {}
     residuals: list[float] = []
+    projection = spec.model.market.curves.projection(spec.index)
     for expiry in sorted(vols_by_expiry):
         row = vols_by_expiry[expiry]
         strikes = tuple(sorted(row))
-        smile = SmileQuote(expiry, strikes, tuple(row[k] for k in strikes))
+        # A CAPLET's forward IS the single-period forward over the index's canonical accrual — the
+        # same value `calibrate_sabr_smile` reconstructed internally before B4, now stated at the
+        # call site. Byte-identical for this path by construction; the swaption cube passes its own
+        # `S = float_leg_pv/rpv01` instead.
+        try:
+            fwd = forward(projection, spec.index.canonical_accrual(expiry))
+        except (ValueError, KeyError, ZeroDivisionError) as exc:
+            return CalibrationFailure(f"expiry {expiry.isoformat()}: {exc}")
+        smile = SmileQuote(expiry, strikes, tuple(row[k] for k in strikes), fwd)
         fit = calibrate_sabr_smile(
-            SabrCalibrationSpec(spec.model, spec.index, smile, spec.beta, spec.solve)
+            SabrCalibrationSpec(spec.model, smile, spec.beta, spec.solve)
         )
         if isinstance(fit, CalibrationFailure):
             return CalibrationFailure(f"expiry {expiry.isoformat()}: {fit.reason}", fit.residuals)
