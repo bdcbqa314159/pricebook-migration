@@ -64,12 +64,12 @@ def _seed_smile(model: SABRModel) -> SmileQuote:
     t = TM.year_fraction(EXPIRY)
     strikes = tuple(fwd + d for d in (-0.015, -0.007, 0.0, 0.007, 0.015, 0.025))
     vols = tuple(sabr_vol(fwd, k, t, SEED) for k in strikes)
-    return SmileQuote(EXPIRY, strikes, vols)
+    return SmileQuote(EXPIRY, strikes, vols, fwd)
 
 
 def test_sabr_calibration_round_trip_recovers_seed() -> None:
     model = _model()
-    spec = SabrCalibrationSpec(model, INDEX, _seed_smile(model), BETA, SolveConfig(tolerance=1e-12))
+    spec = SabrCalibrationSpec(model, _seed_smile(model), BETA, SolveConfig(tolerance=1e-12))
     out = calibrate_sabr_smile(spec)
     assert not isinstance(out, CalibrationFailure)
     params, result = out
@@ -85,7 +85,7 @@ def test_sabr_calibration_reprice_identity_through_model() -> None:
     # the fitted params, read back by SABRModel, reproduce the target smile at the SAME forward (§3d)
     model = _model()
     smile = _seed_smile(model)
-    out = calibrate_sabr_smile(SabrCalibrationSpec(model, INDEX, smile, BETA))
+    out = calibrate_sabr_smile(SabrCalibrationSpec(model, smile, BETA))
     assert not isinstance(out, CalibrationFailure)
     params, _ = out
     fitted = SABRModel(
@@ -102,7 +102,7 @@ def test_sabr_calibration_degenerate_smile_is_a_failure_value() -> None:
     t = TM.year_fraction(EXPIRY)
     strikes = (-0.005, 0.0, fwd, fwd + 0.01)  # ascending, but two non-positive strikes
     vols = tuple(0.2 for _ in strikes)
-    spec = SabrCalibrationSpec(model, INDEX, SmileQuote(EXPIRY, strikes, vols), BETA)
+    spec = SabrCalibrationSpec(model, SmileQuote(EXPIRY, strikes, vols, fwd), BETA)
     assert isinstance(calibrate_sabr_smile(spec), CalibrationFailure)
 
 
@@ -110,11 +110,11 @@ def test_smile_quote_validates_its_shape() -> None:
     import pytest
 
     with pytest.raises(ValueError):
-        SmileQuote(EXPIRY, (0.02, 0.03), (0.2, 0.2))  # <3 points
+        SmileQuote(EXPIRY, (0.02, 0.03), (0.2, 0.2), 0.03)  # <3 points
     with pytest.raises(ValueError):
-        SmileQuote(EXPIRY, (0.02, 0.03, 0.04), (0.2, 0.2))  # length mismatch
+        SmileQuote(EXPIRY, (0.02, 0.03, 0.04), (0.2, 0.2), 0.03)  # length mismatch
     with pytest.raises(ValueError):
-        SmileQuote(EXPIRY, (0.04, 0.03, 0.02), (0.2, 0.2, 0.2))  # not ascending
+        SmileQuote(EXPIRY, (0.04, 0.03, 0.02), (0.2, 0.2, 0.2), 0.03)  # not ascending
 
 
 # ── slice 22: the acceptance gate (ruling 1) and the per-law fits ──────────────────────────
@@ -149,7 +149,7 @@ def test_contradictory_smile_is_a_calibration_failure() -> None:
     fwd = _forward(model)
     strikes = tuple(fwd + d for d in (-0.015, -0.007, 0.0, 0.007, 0.015, 0.025))
     vols = (0.20, 0.60, 0.21, 0.62, 0.22, 0.61)  # alternating — no smooth smile goes through it
-    out = calibrate_sabr_smile(SabrCalibrationSpec(model, INDEX, SmileQuote(EXPIRY, strikes, vols), BETA))
+    out = calibrate_sabr_smile(SabrCalibrationSpec(model, SmileQuote(EXPIRY, strikes, vols, fwd), BETA))
     assert isinstance(out, CalibrationFailure), out
     assert out.residuals  # the gate REPORTS why it rejected, in vol units
     assert max(abs(r) for r in out.residuals) > 1e-4
@@ -158,7 +158,7 @@ def test_contradictory_smile_is_a_calibration_failure() -> None:
 def test_an_acceptable_fit_is_not_rejected_by_the_gate() -> None:
     # the control: a smile that IS a SABR smile passes the same gate (no false positive)
     model = _model()
-    out = calibrate_sabr_smile(SabrCalibrationSpec(model, INDEX, _seed_smile(model), BETA))
+    out = calibrate_sabr_smile(SabrCalibrationSpec(model, _seed_smile(model), BETA))
     assert not isinstance(out, CalibrationFailure), out
 
 
@@ -169,8 +169,8 @@ def test_round_trip_under_the_normal_law() -> None:
     model = _laws_model(VolLawKind.NORMAL, 0.0, seed)
     fwd, t = _forward(model), TM.year_fraction(EXPIRY)
     strikes = tuple(fwd + d for d in (-0.015, -0.007, 0.0, 0.007, 0.015, 0.025))
-    smile = SmileQuote(EXPIRY, strikes, tuple(sabr_normal_vol(fwd, k, t, seed) for k in strikes))
-    out = calibrate_sabr_smile(SabrCalibrationSpec(model, INDEX, smile, 0.0))
+    smile = SmileQuote(EXPIRY, strikes, tuple(sabr_normal_vol(fwd, k, t, seed) for k in strikes), fwd)
+    out = calibrate_sabr_smile(SabrCalibrationSpec(model, smile, 0.0))
     assert not isinstance(out, CalibrationFailure), out
     params, result = out
     assert abs(params.alpha - seed.alpha) < 1e-8
@@ -191,8 +191,8 @@ def test_round_trip_under_the_shifted_law_with_a_negative_forward() -> None:
     fwd, t = _forward(model), TM.year_fraction(EXPIRY)
     assert fwd < 0.0
     strikes = tuple(fwd + d for d in (0.002, 0.008, 0.016, 0.024, 0.032))
-    smile = SmileQuote(EXPIRY, strikes, tuple(sabr_vol(fwd + shift, k + shift, t, seed) for k in strikes))
-    out = calibrate_sabr_smile(SabrCalibrationSpec(model, INDEX, smile, 0.5))
+    smile = SmileQuote(EXPIRY, strikes, tuple(sabr_vol(fwd + shift, k + shift, t, seed) for k in strikes), fwd)
+    out = calibrate_sabr_smile(SabrCalibrationSpec(model, smile, 0.5))
     assert not isinstance(out, CalibrationFailure), out
     params, _ = out
     assert abs(params.alpha - seed.alpha) < 1e-6
@@ -208,7 +208,7 @@ def test_negative_forward_smile_fails_under_the_lognormal_law() -> None:
     seed = SabrParams(alpha=0.20, beta=0.5, rho=-0.30, nu=0.40)
     model = _negative_model(VolLawKind.LOGNORMAL, 0.0, seed)
     strikes = (0.002, 0.008, 0.016)
-    smile = SmileQuote(EXPIRY, strikes, (0.3, 0.25, 0.22))
-    out = calibrate_sabr_smile(SabrCalibrationSpec(model, INDEX, smile, 0.5))
+    smile = SmileQuote(EXPIRY, strikes, (0.3, 0.25, 0.22), _forward(model))
+    out = calibrate_sabr_smile(SabrCalibrationSpec(model, smile, 0.5))
     assert isinstance(out, CalibrationFailure)
     assert "Lognormal" in out.reason

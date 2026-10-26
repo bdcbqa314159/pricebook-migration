@@ -19,9 +19,10 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 22 / 793** — 19 PHYSICALLY PARKED (13 at Topic-0 close **+ 6 at the
-Topic-1 close**, v0.98.0) **+ 3 ticked and awaiting the batch park** (`options/sabr.py`, slice 22,
-v0.108.0; `options/capfloor.py`, slice 23, v0.109.0; `options/implied_vol.py`, slice 24, v0.110.0 —
+**Deletable (the §4 drawdown bar): 23 / 793** — 19 PHYSICALLY PARKED (13 at Topic-0 close **+ 6 at the
+Topic-1 close**, v0.98.0) **+ 4 ticked and awaiting the batch park** (`options/sabr.py`, slice 22,
+v0.108.0; `options/capfloor.py`, slice 23, v0.109.0; `options/implied_vol.py`, slice 24, v0.110.0;
+`options/swaption_vol_cube.py`, slice B, v0.114.0 —
 physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 modules below are now git-mv'd into `parked/topic-01-yield-curve/`:
 - **slice-3 retire read (2):** `curves/bootstrap.py` and `core/discount_curve.py`, superseded by ng
   `calibrate` / `DiscountCurve` (deposits→FRAs→futures→swaps dual-curve sequential, minus deferred
@@ -220,6 +221,58 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   inverter, since a cube built from prices needs it). Cross-expiry/tenor node interpolation →
   `deferred→` the first off-pillar-node consumer. **Tick 0; drawdown unchanged at 22 / 793** — the full
   tick lands with slice B. Evidence: `AUDIT_swaption_sabr_read.md` + `CHANGELOG` v0.111.0.
+
+- **T1 slice-B swaption-cube retire read (+1 TICK — `options/swaption_vol_cube.py` DELETABLE, 22 → 23 / 793):**
+  the partial cross recorded at slice 25 (the smile READ) closes here with the **calibration + node
+  scanner** → ng `calibration/swaption_cube.py`: `build_swaption_vol_cube` returns the outcome for
+  **every quoted node**, keyed `(SwaptionSurfaceKey, expiry)`, successes as
+  `(SabrParams, CalibrationResult)` and failures as that node's `CalibrationFailure` with residuals;
+  `swaption_cube()` derives `{key → SabrSurface}` from the successes and `calibrated_count()` is
+  **derived, never stored** (a stored count is the proxy §6's second clause forbids). Spec + rulings:
+  `spec_slice_B_swaption_cube.md` (B1–B4). Audits: `AUDIT_swaption_vol_cube.md` (9 findings),
+  `AUDIT_slice_B_forward_threading.md` (the align-step STOP).
+  **Superseded:** `SwaptionVolCube` + its read surface (`vol`/`vol_by_years`/`atm_vol`/`smile`) by
+  `SabrSurface` + `SABRModel.swaption_vol` (slice A); `SABRNode` by `SabrParams`/`SabrSurface`.
+  **Shed, with evidence (§4 protocol — bare-name search over `quarry/` source *and* tests, plus
+  string-key/getattr/kwargs checks):** `SABRNode` **0 external refs**; `SwaptionVolCubeResult`
+  **0 external refs** (shed for the ratified `CalibrationResult`); `_nearest_sabr` — the nearest-node
+  strike snap, which ranked nodes by `(Δexpiry)² + (Δtenor)²` (mixed units) under a magic
+  `dist < 4.0` commented *"within ~2Y on each axis"* (false: it admits 2.0Y on one axis or 1.41Y on
+  both) and then priced the requested strike against a **different** node's smile; the `SABRNode.vol`
+  ATM fast-path (made the smile discontinuous at the money — grid-ATM at K=F, Hagan at K=F±1e-8);
+  and the bare fallbacks returning grid-ATM / `0.0` on failure (the silent-wrongness family already
+  shed in slices 23 and 25).
+  **`bumped()` is NOT ported — it is wrong, measured.** It added an absolute vol shift to SABR
+  `alpha`, which is a vol only at β=1. Against ng's own `sabr_vol` (F=0.03, β=0.5, ATM=20%, T=5Y):
+  intended +1.0bp, realised **+5.97bp at K=F, +5.43bp at 1.25F, +6.19bp at 0.80F** — bracketing the
+  predicted `1/F^(1-β) = 5.77×`, and strike-dependent, so it *tilted* the smile while its docstring
+  claimed to keep it consistent. ng has no cube bump, so nothing inherited it.
+  **`deferred→` (each a capability, never a product — §4, so none blocks the tick):**
+  off-pillar / cross-node interpolation **and** the shared `interp_surface` L0 atom → **first
+  off-pillar consumer**; the cube vol bump, rebuilt correctly (bump the vol, re-imply alpha) →
+  **L5 risk**; arb-free SABR (Hagan-2002 wing arb) → its own slice.
+  **Resident quarry importer does not block the tick** (precedent: `options/sabr.py` ticked at slice 22
+  with 25 quarry importers; the physical `git mv` batches at the topic close). `options/synthetic_swaption_data.py`
+  imports `SwaptionVolCube`/`build_swaption_vol_cube` — **forward-linked on its own row below**.
+  Evidence: `AUDIT_swaption_vol_cube.md` + `AUDIT_slice_B_forward_threading.md` + `CHANGELOG` v0.114.0.
+
+- **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
+  - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
+    `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
+    `calibration/swaption_cube.py` (or drop — it is a synthetic-data helper for "testing and
+    calibration without external market data feeds", consumed only by
+    `models/hw_per_currency.py:114` via a lazy import). Its import is what keeps the physical park
+    of `swaption_vol_cube.py` batched rather than immediate.
+  - **first off-pillar swaption-cube consumer** — **on crossing:** build the bilinear
+    `interp_surface(expiries, tenors, grid, x, y)` **once**, in `foundation/interpolation` (bilinear
+    is finance-free → L0), composed by both the cube calibration and the read (§3d, ruling B3). The
+    quarry implemented this atom **twice in one file** and the copies disagreed — on a 1-expiry grid
+    `_lookup_atm` returned `0.25` while `_interp_atm` raised `IndexError` — which is exactly the
+    calibrate-with-one-atom / price-with-another failure §3d exists to prevent. Neither copy crosses.
+    Also due here: an off-pillar query must be a `PricingFailure`, never the quarry's silent clamp to
+    the edge value.
+  - **L5 risk (cube vega / vol bump)** — **on crossing:** build the cube bump as *bump the vol and
+    re-imply alpha*. Never port `bumped()` (see the measurement above).
 
 The six Topic-1 deletables are now **physically parked** (git-mv'd at the T1 close, one event, doc 18 §9).
 Full retire evidence + resident inventory (file:line) + forward-links are in the Topic-1 MANIFEST retire
