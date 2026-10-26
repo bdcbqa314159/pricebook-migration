@@ -11,6 +11,53 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.117.0] - 2026-10-26
+
+**Swaption-cluster tail retire-sweep — 2 ticks. Drawdown 23 → 25 / 793. The swaption / vol cluster
+closes whole.** Evidence + Cowork's spot-check ruling:
+`docs/handoffs/RETIRE_swaption_cluster_tail.md` (thread 0017–0019). No ng code: both ticks are
+supersede-with-evidence against paths already built and oracled, which is why this stayed a sweep
+rather than becoming two slices.
+
+### Retired (+2)
+- **`options/swaption_vol.py`** — exports exactly `SwaptionVolSurface` (a 2D ATM `vol(expiry, tenor)`
+  grid), 1 production importer. The container is superseded by
+  `{SwaptionSurfaceKey(index, swap_tenor): Surface}`: ng types
+  `surfaces: Mapping[SurfaceKey | SwaptionSurfaceKey, Surface | SabrSurface]`, so one 2D grid
+  decomposes into keys × term structures (doc 19, closed-shapes×open-keys). **Oracle verified** at
+  `tests/L4/test_swaption_sabr.py:254`. `.bumped` → `risk/greeks.py::vol_vega` — and it is
+  dimensionally *correct*, unlike the cube's `bumped` (slice B F7, 5.4–6.2× wrong): a `Surface`'s
+  entries are vols, whereas `alpha` is a vol only at β=1.
+- **`options/swaption_conventions.py`** — all five public names have **0 production consumers**.
+  Superseded *by design*: slice A established a swaption's conventions are the **swap's**, which
+  `RateIndex` cannot carry, so a per-currency lookup registry is the shape ng deliberately lacks.
+  Precedent: retire-#2's `Deposit` with zero production instantiations.
+
+### Left resident, with evidence (4 of the 6 swept)
+`vol_arbitrage_scanner.py` (ng has **zero** arb machinery; `vol_calibration.py:112` imports
+`scan_surface` live — a tick would be a paper tick) · `vol_surface_strike.py` + `vol_smile.py`
+(**general** strike-axis machinery consumed by **equity and FX**; ng's only strike-dependent object is
+the *fitted* `SabrSurface`, not an interpolating container) · `synthetic_swaption_data.py` (live
+consumer `models/hw_per_currency.py:114`).
+
+### Forward-links written onto their destination rows (§4)
+off-pillar consumer (the 2D grid interpolation joins the cube's `interp_surface` atom) ·
+`desks/swaption_desk.py` (re-point to the keyed `Surface`) · first currency-defaulting consumer (mine
+the convention content) · the arb-free-SABR slice · the general vol-surface topic (equity/FX) ·
+the HW/per-currency topic.
+
+### Method note
+The dynamic-reachability sweep returned exactly one hit and it was a **false positive** —
+`market_data/_types.py` holds `SWAPTION_VOL = "swaption_vol"`, a `QuoteKind` enum *value* sharing the
+module's text. Recorded because retire-#1's false negative was this family. `vol_arb.py`'s apparent
+`enforce_no_arb` use is likewise a **docstring** cross-reference, not a consumer. Cowork's own first
+grep over-claimed for the same substring reason and its precise re-check confirmed the read.
+
+### Cluster closed
+Six modules retired across the swaption / vol cluster: `options/{sabr, capfloor, implied_vol,
+swaption_vol_cube, swaption_vol, swaption_conventions}.py` — smile read (slice A) → forward-threaded
+fit (B4) → cube calibration (slice B) → tail sweep.
+
 ## [0.116.0] - 2026-10-26
 
 **The park model: a park is a tracker state, not a physical move. `NG-DEFER-QUARRYIMPORT`

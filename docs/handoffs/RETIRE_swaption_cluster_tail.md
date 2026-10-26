@@ -146,3 +146,31 @@ live, so a tick would be a paper tick.
 
 **Neither proposed tick needs ng code.** Both are supersede-with-evidence against paths already built
 and oracled, which is why this is a sweep and not two slices.
+
+---
+
+## COWORK RULING — 2026-10-26 16:39 (both ticks APPROVED, 23 → 25 / 793)
+
+Spot-checked per §4, not rubber-stamped — and one claim was worth checking:
+
+- **TICK 1 `swaption_vol.py` — APPROVED.** My first (crude substring) grep lit up ~10 modules and
+  looked like an over-claim; it was my grep that was wrong — `swaption_vol` matches `swaption_vol_cube`,
+  `synthetic_swaption_data` and the `QuoteKind` enum value. The precise module-import check confirms
+  the read: `swaption_vol.py` exports exactly `SwaptionVolSurface`, imported by exactly **one**
+  production module (`desks/swaption_desk.py`, un-crossed → `deferred→swaption_desk`, a capability not
+  a product). Container superseded by `{SwaptionSurfaceKey: Surface}`, **oracle verified** at
+  `tests/L4/test_swaption_sabr.py:254` (prices a swaption off `Surface.flat(0.22)` under that key);
+  `.bumped`→`vol_vega` (dimensionally a vol bump, genuinely unlike the cube's `alpha` bug); 2D interp
+  `deferred→` off-pillar consumer. Residual empty.
+- **TICK 2 `swaption_conventions.py` — APPROVED.** Verified independently: all five public names are
+  **0 src, 0 quarry-non-self**, only shared-test hits. Superseded by design (slice A — conventions are
+  the swap's, stated on the contract; a per-currency registry is the shape ng deliberately lacks),
+  retire-#2 precedent holds. Content `deferred→` the first currency-defaulting consumer. Residual empty.
+- **The divergence is RIGHT — `vol_arbitrage_scanner` leave-resident, confirmed.** Grep for
+  arb/butterfly/no-arb machinery in `src/` returns **nothing** — ng has none, the consumer is live, so
+  a tick would be a paper tick. Correctly `deferred→` the arb-free-SABR slice. The other three
+  leave-resident calls (`vol_surface_strike`, `vol_smile` → general vol-surface topic;
+  `synthetic_swaption_data` → HW/per-currency topic) stand.
+
+**Drawdown 23 → 25 / 793** on landing. Code lands the two tracker rows (carrying this ruling), the four
+forward-links on their destination rows, and the version/CHANGELOG stamp in one slice.

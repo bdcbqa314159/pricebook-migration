@@ -19,7 +19,7 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 23 / 793** — **all 23 are TICKED; none is physically moved**
+**Deletable (the §4 drawdown bar): 25 / 793** — **all 25 are TICKED; none is physically moved**
 (park-model amendment, 2026-10-26: a park is a tracker/MANIFEST state, not a `git mv` — CLAUDE.md §4,
 doc 13 §7, ruling `rulings_quarry_park_model.md`). The 19 formerly physically parked at the Topic-0
 (v0.74.0) and Topic-1 (v0.98.0) closes have been **restored to their original quarry paths**: those
@@ -267,6 +267,48 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   sound. Deletable bar met; the tick stands. Thread 0011; carried into the swaption-cluster checkpoint
   as the drawdown review input.
 
+- **T1 swaption-cluster TAIL retire sweep (+2 TICKS — 23 → 25 / 793; Cowork-ruled 2026-10-26, thread 0019):**
+  a six-module consumer-analysis sweep (§4 dead-evidence protocol over `quarry/pricebook` **and**
+  `quarry/tests`' 952 files, plus dynamic reachability). Evidence + verdicts:
+  `handoffs/RETIRE_swaption_cluster_tail.md`, carrying Cowork's spot-check ruling.
+  - **`options/swaption_vol.py` DELETABLE (+1).** Exports exactly `SwaptionVolSurface` (a 2D ATM
+    `vol(expiry, tenor)` grid); **1** production importer. **Superseded:** the container →
+    `{SwaptionSurfaceKey(index, swap_tenor): Surface}` — ng types
+    `surfaces: Mapping[SurfaceKey | SwaptionSurfaceKey, Surface | SabrSurface]`, so one 2D grid
+    decomposes into keys × term structures (doc 19 closed-shapes×open-keys). **Oracle verified:**
+    `tests/L4/test_swaption_sabr.py:254` prices a swaption off `Surface.flat(0.22)` under that key.
+    `.bumped(shift)` → `risk/greeks.py::vol_vega` — and note it is **dimensionally correct**, unlike
+    the cube's `bumped` (slice B F7, 5.4–6.2× wrong): a `Surface`'s entries *are* vols, whereas
+    `alpha` is a vol only at β=1. **`deferred→`:** the 2D off-pillar interpolation
+    (`_interp_2d`/`_interp_expiry`/`_interp_tenor`) → first off-pillar consumer; the one importer
+    `desks/swaption_desk.py` → `deferred→swaption_desk`. Both capabilities, not products (§4).
+  - **`options/swaption_conventions.py` DELETABLE (+1).** All five public names (`VolQuoteType`,
+    `SmileType`, `SwaptionConvention`, `get_swaption_convention`, `list_swaption_currencies`):
+    **0 production consumers**; two have 1 test hit each, in a shared test that retires with the
+    module. **Superseded by design, not by a type:** slice A established a swaption's conventions are
+    the **swap's** (fixed-leg frequency + day counts), which `RateIndex` cannot carry — so a
+    per-currency lookup registry is the shape ng deliberately lacks; the contract states its
+    conventions instead of defaulting them. Precedent: retire-#2's quarry `Deposit` with zero
+    production instantiations — conventions with no ng consumer are shed debt, not residual.
+    **`deferred→`:** the convention *content* → first currency-defaulting consumer.
+  - **Left resident, with evidence (4):** `vol_arbitrage_scanner.py` — ng has **zero** arb machinery
+    and `options/vol_calibration.py:112` lazily imports `scan_surface` live, so a tick would be a paper
+    tick; `vol_surface_strike.py` + `vol_smile.py` — **general** strike-axis vol machinery consumed by
+    **equity and FX** desks, with no ng counterpart (ng's only strike-dependent object is the *fitted*
+    `SabrSurface`, not an interpolating container); `synthetic_swaption_data.py` — live consumer
+    `models/hw_per_currency.py:114`.
+  - **Method note (the protocol asks how, not just what):** the dynamic sweep returned exactly one
+    hit — `market_data/_types.py` holding the string `"swaption_vol"` — and it is a **false positive**
+    (`SWAPTION_VOL = "swaption_vol"` is a `QuoteKind` enum *value* sharing the text). Recorded because
+    retire-#1's false negative was this family. Separately `vol_arb.py`'s apparent `enforce_no_arb`
+    use is a **docstring** cross-reference, so that name has 0 real source consumers. Cowork's own
+    first grep over-claimed for the same reason (substring `swaption_vol` matches `_cube`,
+    `synthetic_swaption_data`, the enum) and its precise re-check confirmed the read.
+
+  **This closes the swaption / vol cluster whole** — smile read (slice 25/A) → forward-threaded fit
+  (slice B, B4) → cube calibration (slice B) → tail sweep. Six modules retired across it:
+  `options/{sabr, capfloor, implied_vol, swaption_vol_cube, swaption_vol, swaption_conventions}.py`.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
@@ -284,6 +326,26 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     the edge value.
   - **L5 risk (cube vega / vol bump)** — **on crossing:** build the cube bump as *bump the vol and
     re-imply alpha*. Never port `bumped()` (see the measurement above).
+  - **first off-pillar swaption/vol consumer** — **also on crossing:** `swaption_vol.py`'s 2D
+    `(expiry, tenor)` grid interpolation retires here too, alongside the cube's `interp_surface` atom
+    (ruling B3). One bilinear atom in `foundation/interpolation` serves both.
+  - **`desks/swaption_desk.py`** — **on crossing:** it is the single production importer of the now-ticked
+    `options/swaption_vol.py` (`SwaptionVolSurface`). Re-point at
+    `{SwaptionSurfaceKey(index, swap_tenor): Surface}` in the snapshot; nothing to restore, since under
+    the park model no file moved.
+  - **first consumer wanting currency-DEFAULTED swaption conventions** — **on crossing:** mine
+    `options/swaption_conventions.py` for content (USD Black/semi-annual, EUR normal, the standard
+    expiry/tenor grids). ng states conventions on the contract (slice A), so this is a convenience
+    layer over that, never a replacement for it.
+  - **the arb-free-SABR slice** — **on crossing:** `options/vol_arbitrage_scanner.py` retires with it
+    (`scan_surface`, `enforce_no_arb`, butterfly + calendar violation detection). Its live consumer
+    `options/vol_calibration.py::VolSurface.arb_report` re-points then.
+  - **the general vol-surface topic** (or whichever of equity / FX arrives first) — **on crossing:**
+    `options/vol_smile.py` and `options/vol_surface_strike.py` retire together — an interpolating
+    strike-smile container and the per-expiry surface built on it. Consumers today:
+    `desks/equity_vol_desk.py`, `fx/fx_vol_surface.py`.
+  - **the HW / per-currency-models topic** — **on crossing:** `options/synthetic_swaption_data.py`
+    retires with `models/hw_per_currency.py`, its one live consumer (`synthetic_hw_targets`).
 
 The six Topic-1 deletables are now **physically parked** (git-mv'd at the T1 close, one event, doc 18 §9).
 Full retire evidence + resident inventory (file:line) + forward-links are in the Topic-1 MANIFEST retire
