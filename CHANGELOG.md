@@ -11,6 +11,87 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.118.0] - 2026-10-26
+
+**B6 credit opens — slice 1: the L0 identity, the L1 survival curve, the shared credit atoms, and the
+survival bootstrap.** Spec + rulings: `docs/handoffs/spec_credit_B6_slice1.md` (Cowork, thread
+0021). **Drawdown unchanged at 25 / 793** — the quarry survival curve is a *partial* cross, see below.
+399 tests (was 375).
+
+### Added — L0: one identity, and only one
+- **`foundation/reference_entity.py`** — `ReferenceEntity(name)`, `AssetClass.CREDIT`, satisfying the
+  existing `Underlying` protocol. §3c's corollary: an asset class adds roughly *one* L0 object, its
+  identity. It carries **no** hazard or recovery (L1 market state that risk bumps) and **no**
+  seniority or credit-event definitions (L2 contract description). `underlying.py` had recorded that
+  the speculative sibling was cut in Phase 4 to "return with *validated* fields when its asset class
+  actually ships" — this is that return.
+
+### Added — L1: the survival curve, as a distinct capability
+- **`market/survival_curve.py`** — `SurvivalCurve` stores Q at pillars and interpolates log-linearly,
+  which *is* piecewise-constant hazard, so one representation answers both `survival` and `hazard`.
+  `bumped(shift)` shifts the **hazard**, not Q: a hazard shift is the credit-spread bump risk applies
+  and it keeps Q monotone by construction. Guards reject Q outside (0,1] and **rising** Q (a negative
+  hazard — the entity un-defaulting).
+- **`SurvivalHandle` is a sibling protocol to `CurveHandle`, not a widening of it.** A survival curve
+  has no `df` and a discount curve has no `survival`; widening one protocol would force every discount
+  curve to answer a credit question. Same reasoning as `ImpliedVol`/`SwaptionVol` being two model
+  capabilities.
+- **`CurveSet.survival(entity)` lands** — the accessor `curve_set.py` had explicitly deferred "with
+  its asset class". `CurveRole.SURVIVAL`, `CurveKey.id` accepts `ReferenceEntity`: credit adds
+  **keys, not fields** (§3c). An unknown entity **raises** rather than defaulting to risk-free — a
+  silently risk-free credit curve prices every CDS to zero protection.
+
+### Added — the shared credit atoms (§3d), defined ONCE
+- **`risky_annuity(schedule, day_count, discount, survival)`** — the credit sibling of `rpv01`:
+  `Σ τ·df(pay)·Q(pay)` plus the **accrual-on-default** term `Σ (τ/2)·df(mid)·(Q₁−Q₂)`. The
+  half-period convention is **stated explicitly**, as the spec required, with its deferral (finer
+  within-period integration → its first short-stub consumer).
+- **`protection_leg(accrual, recovery, discount, survival, steps_per_year)`** —
+  `(1−R)·Σ df(mid)·(Q₁−Q₂)`. The increments sum to `Q(0)−Q(T)` by construction whatever the grid, so
+  the only approximation is *when* within a step, never *whether*. `recovery` is explicit, never
+  defaulted: a guessed R silently rescales every credit number.
+- **Why once:** the bootstrap fits with these and the slice-2 engine will price with these. Had the
+  fit rolled its own credit annuity, the calibrator would make each CDS par while the engine marked it
+  non-zero — and par-spread-to-zero could not see it, because it telescopes exactly as par swaps do.
+  The annuity lesson, applied to credit before it could bite.
+
+### Added — L3: the bootstrap
+- **`calibration/credit.py`** — one survival pillar per par CDS quote, ascending, each a 1-D monotone
+  solve on the segment hazard through the shared `invert_increasing` (the Jacobian is triangular: a
+  CDS maturing at tᵢ has no cashflow beyond it). Returns `(curve, CalibrationResult)` with **one
+  residual per quote**, or a `CalibrationFailure` **naming the pillar** — never a silently shortened
+  curve (§6 floor rule, the swaption-cube lesson).
+
+### Oracles — 24 new, rung 1 where it matters
+Flat hazard ⇒ `Q(t)=exp(−λt)` to **1e-12** and hazard reads back λ · the protection leg against the
+**analytic integral** `(1−R)·λ/(r+λ)·(1−e^{−(r+λ)T})` — a second method, not a restatement · the
+continuous par spread → **λ(1−R)** · `risky_annuity` at λ=0 **is** `rpv01` to 1e-12 · par-spread-to-zero
+on every quote through the same atoms · **N quotes → N pillars** with one residual each · an unfittable
+pillar as a counted `CalibrationFailure` · monotone-Q and recovery-domain guards.
+
+### Found by measurement — the protection leg's day-granularity floor
+`steps_per_year` defaults to **12**, chosen on measurement rather than convention. Error against the
+analytic integral: n=1 → 1.6e-5, **n=12 → 2.1e-6**, n=52 → 4.9e-6, n=365 → 5.1e-6. Refining past
+monthly makes it *worse*, then plateaus: `CurveHandle.df` takes a **date**, so at daily steps the
+midpoint of a one-day step floors to that step's start and `df` is read half a day early at every
+step — a systematic bias refinement accumulates rather than removes. The midpoint rule's quadratic
+convergence wins until it meets that floor, at roughly monthly steps. The quarry defaulted to 12 too;
+the measurement says it was right. A sub-day-accurate leg needs a `df(t: float)` capability, deferred.
+
+### Retired: none — the quarry survival curve is a PARTIAL cross
+`core/survival_curve.py` (271 lines, 14 methods, **59 production importers**) crosses partially. Nine
+methods are unmatched and each has a named destination: `default_prob` + `forward_hazard` /
+`forward_survival` / `marginal_default_density` → slice 2 and the first conditional-survival consumer;
+`term_structure` / `pillar_hazards` → credit reporting/risk; `bumped_at` (single-pillar) → L5 credit
+key-rate risk; serialisation → `deferred→persistence`. `to_calibration_result` is superseded by shape
+(doc 19: the result sits beside the curve, never on it). The deletable bar is an *empty* residual, not
+"looks covered" (§4) — so no tick, honestly.
+
+### Also
+`TEST_FLOOR` 375 → 399, raised in the counting commit. One suppression was **removed rather than
+ledgered**: a frozenness test needed a type-checker ignore, so it uses `setattr` instead — a
+frozenness assertion should not owe debt (§5).
+
 ## [0.117.0] - 2026-10-26
 
 **Swaption-cluster tail retire-sweep — 2 ticks. Drawdown 23 → 25 / 793. The swaption / vol cluster

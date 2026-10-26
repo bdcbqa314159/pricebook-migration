@@ -309,6 +309,30 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   (slice B, B4) → cube calibration (slice B) → tail sweep. Six modules retired across it:
   `options/{sabr, capfloor, implied_vol, swaption_vol_cube, swaption_vol, swaption_conventions}.py`.
 
+- **B6 credit slice-1 retire read (0 TICKS — PARTIAL cross; drawdown unchanged at 25 / 793):**
+  `quarry/pricebook/core/survival_curve.py` (271 lines, 14 methods, **59 production importers**)
+  crosses **partially** as ng `market/survival_curve.py` — `SurvivalCurve` (log-linear Q =
+  piecewise-flat hazard), `survival`, `hazard`, `bumped` (hazard shift), `with_pillar`,
+  `flat_hazard`, plus the `SurvivalHandle` capability and `CurveSet.survival(entity)`. **No tick:**
+  the deletable bar is an *empty* residual, not "looks covered" (§4), and nine methods are unmatched.
+  **Resident residual, each with its named destination:**
+  `default_prob(d1,d2)` and `forward_hazard`/`forward_survival`/`marginal_default_density`
+  (conditional//marginal reads) → **the CDS product + engine (slice 2)** and whichever credit
+  product first needs conditional survival; `term_structure`/`pillar_hazards` (introspection) →
+  **credit reporting/risk**; `bumped_at` (single-pillar bump) → **L5 credit key-rate risk**
+  (ng has the parallel hazard bump only); `_sc_to_dict`/`_sc_from_dict` → **`deferred→persistence`**,
+  the established serialisation pattern. `to_calibration_result` is **superseded by shape** — ng
+  returns `(curve, CalibrationResult)` as a pair, never hanging the result off the curve (doc 19:
+  the result sits BESIDE the model/curve, never on it).
+  **Also landed this slice, not from this module:** `foundation/reference_entity.py` (the one L0
+  identity credit adds, §3c corollary — `underlying.py` had recorded that it "returns with
+  *validated* fields when its asset class actually ships"), and the two shared credit atoms
+  `risky_annuity` / `protection_leg` in `market/building_blocks.py`, which the quarry spread across
+  `credit/cds.py`'s `premium_leg_pv`/`protection_leg_pv`/`risky_annuity` — mined for **content**
+  (the half-period accrual-on-default convention, the midpoint-discounted protection integral), not
+  for shape. `credit/cds.py` (1035 lines) is itself untouched and crosses with slice 2.
+  Evidence: `spec_credit_B6_slice1.md` + `CHANGELOG` v0.118.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's

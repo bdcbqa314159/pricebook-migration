@@ -4,6 +4,7 @@ Oracle 1 is **closed form (rung 1)**: under a flat hazard λ the survival curve 
 exactly, and the hazard read back is λ at every t. No self-consistency anywhere in this file.
 """
 
+import dataclasses
 import math
 from datetime import date
 
@@ -40,8 +41,12 @@ def test_reference_entity_satisfies_the_underlying_protocol() -> None:
 
 
 def test_reference_entity_is_frozen_and_hashable_so_it_can_key_a_curve() -> None:
-    with pytest.raises(Exception):
-        ACME.name = "OTHER"  # type: ignore[misc]
+    # `setattr` rather than a direct attribute assignment: the direct form needs a type-checker
+    # suppression, and §5 says a suppression is ledgered or does not exist — a frozenness assertion
+    # should not owe debt. (Do not spell the suppression out in prose here either: `verify.py debt`
+    # matches the literal text per line, so even a comment ABOUT one counts as one.)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(ACME, "name", "OTHER")
     assert {ACME: 1}[ReferenceEntity("ACME")] == 1  # value identity, not object identity
 
 

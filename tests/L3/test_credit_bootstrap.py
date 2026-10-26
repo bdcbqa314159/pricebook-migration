@@ -68,7 +68,7 @@ def test_protection_leg_matches_the_analytic_flat_hazard_integral() -> None:
     end = VAL + Tenor(years, Y)
     T = TM.year_fraction(end)
     analytic = (1.0 - RECOVERY) * lam / (r + lam) * (1.0 - math.exp(-(r + lam) * T))
-    numeric = protection_leg(Accrual(VAL, end, DC365), RECOVERY, _disc(r), _surv(lam), 365)
+    numeric = protection_leg(Accrual(VAL, end, DC365), RECOVERY, _disc(r), _surv(lam), 12)
     assert abs(numeric - analytic) < 5e-6, (numeric, analytic)
 
 
@@ -78,7 +78,7 @@ def test_the_continuous_par_spread_tends_to_lambda_times_lgd() -> None:
     end = VAL + Tenor(years, Y)
     T = TM.year_fraction(end)
     disc, surv = _disc(r), _surv(lam)
-    prot = protection_leg(Accrual(VAL, end, DC365), RECOVERY, disc, surv, 365)
+    prot = protection_leg(Accrual(VAL, end, DC365), RECOVERY, disc, surv, 12)
     cont_annuity = (1.0 - math.exp(-(r + lam) * T)) / (r + lam)
     assert abs(prot / cont_annuity - lam * (1.0 - RECOVERY)) < 1e-4
 
@@ -95,16 +95,23 @@ def test_risky_annuity_is_survival_weighted_and_below_the_riskless_one() -> None
     assert abs(flat_zero - riskless) < 1e-12  # λ=0 ⇒ the credit annuity IS rpv01
 
 
-# ── ORACLE 4 — convergence of the discretised integral ─────────────────────────────────────
-def test_protection_leg_converges_as_the_grid_refines() -> None:
+# ── ORACLE 4 — the discretisation's accuracy, and its day-granularity FLOOR ───────────────
+def test_protection_leg_is_accurate_across_grids_and_best_near_monthly() -> None:
+    """The midpoint rule converges quadratically until it meets a floor that refinement cannot
+    remove: `CurveHandle.df` takes a **date**, so at daily steps the midpoint of a one-day step
+    floors to that step's start and `df` is read half a day early at every step. Measured against
+    the analytic integral, error is 1.6e-5 at n=1, 2.1e-6 at n=12, then *rises* to 5.1e-6 by n=365.
+    So the oracle asserts (a) every grid is accurate to 2e-5, (b) the default n=12 beats both the
+    coarsest and the finest — which is why 12 is the default, on measurement not convention."""
     r, lam, years = 0.03, 0.05, 5
     end = VAL + Tenor(years, Y)
     T = TM.year_fraction(end)
     analytic = (1.0 - RECOVERY) * lam / (r + lam) * (1.0 - math.exp(-(r + lam) * T))
     acc, disc, surv = Accrual(VAL, end, DC365), _disc(r), _surv(lam)
-    errs = [abs(protection_leg(acc, RECOVERY, disc, surv, n) - analytic) for n in (4, 12, 52, 365)]
-    assert errs == sorted(errs, reverse=True), errs   # strictly improving
-    assert errs[-1] < errs[0] / 50
+    err = {n: abs(protection_leg(acc, RECOVERY, disc, surv, n) - analytic) for n in (1, 12, 365)}
+    assert max(err.values()) < 2e-5, err
+    assert err[12] < err[1] and err[12] < err[365], err   # the floor, asserted not assumed
+    assert err[12] < 5e-6, err
 
 
 # ── ORACLE 2 — par-spread-to-zero through the SAME atoms (§3d) ─────────────────────────────
@@ -123,7 +130,7 @@ def test_every_quoted_cds_reprices_to_zero_on_the_bootstrapped_curve() -> None:
     curve, _result = out
     for q in spec.quotes:
         sched = build_schedule(VAL, q.maturity, ScheduleTerms(frequency=Frequency.QUARTERLY, roll=RollRule(calendar=None)))
-        prot = protection_leg(Accrual(VAL, q.maturity, DC365), spec.recovery, spec.discount, curve, 365)
+        prot = protection_leg(Accrual(VAL, q.maturity, DC365), spec.recovery, spec.discount, curve)
         prem = q.spread * risky_annuity(sched, DC360, spec.discount, curve)
         assert abs(prot - prem) < 1e-9, (q.maturity, prot, prem)
 
