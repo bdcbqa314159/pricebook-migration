@@ -11,7 +11,7 @@ mechanics belong to the credit topic (higher layer), never L0. Collateral/CSA
 discounting is a *numeraire* — an L3 model choice — and is deliberately absent here.
 
 Provenance:
-  quarry: quarry/parked/topic-00-foundation/settlement.py (zero-fan-in orphan — content mined, structure ignored)
+  quarry: quarry/pricebook/core/settlement.py (zero-fan-in orphan — content mined, structure ignored)
   source: ISDA settlement definitions; ACI Model Code (FX T+2)
   oracle: settlement date = trade + lag under a calendar; cash vs physical flow types;
           settlement currency ≠ contract currency

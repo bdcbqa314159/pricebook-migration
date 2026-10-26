@@ -10,7 +10,7 @@ machinery is deferred: a non-None collateral raises. `survival`/`inflation` acce
 a `{index → curve}` map for multiple projections arrive with their asset class / 2nd curve.
 
 Provenance:
-  quarry: quarry/parked/topic-01-yield-curve/ncurve_solver.py (curves-keyed-by-name concept)
+  quarry: quarry/pricebook/curves/ncurve_solver.py (curves-keyed-by-name concept)
   source: docs/19 §2-§3 (closed shapes × open keys; typed CurveSet accessors)
   oracle: OIS projection is the discount curve; a EURIBOR swap prices to zero dual-curve
   slice:  dual-curve-euribor-estr (T1 slice 2)

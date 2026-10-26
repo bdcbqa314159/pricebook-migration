@@ -11,6 +11,62 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.116.0] - 2026-10-26
+
+**The park model: a park is a tracker state, not a physical move. `NG-DEFER-QUARRYIMPORT`
+DISCHARGED — the quarry imports again (792 modules, 0 failing).** Ruling:
+`docs/handoffs/rulings_quarry_park_model.md` (option A). Apparatus slice: law + quarry packaging + a
+gate; ticks nothing, exempt from §4's cross-cutting-ticks-≥1. Drawdown unchanged at **23 / 793**.
+
+### Fixed — the quarry is importable for the first time since v0.74.0
+- **The 19 physically parked modules are restored** to their original quarry paths (15 → `core/`,
+  4 → `curves/`). `import pricebook` across the tree: **318 → 792 importable, 265 → 0 failing.**
+- The Topic-0 (v0.74.0) and Topic-1 (v0.98.0) `git mv` parks removed modules that **294 live quarry
+  modules import directly** (`discount_curve` by 223, `day_count` by 221, `serialisable` by 92,
+  `schedule` by 79). §7c's "quarry regression nightly" was therefore **unachievable for ~40
+  versions** — a stated guarantee that never ran.
+
+### Changed — the law
+- **CLAUDE.md §4** gains the park-model clause: a crossed module is ticked deletable in the tracker
+  and recorded on its MANIFEST row; **its file stays in `quarry/`** until the tree is deleted once at
+  v1.0. *"Quarry empty = v1.0"* is clarified, not changed — the physical emptying moves from per-park
+  to once; drawdown (/793) unchanged.
+- **doc 13 §7** (new) records why the physical move yielded: of the three commitments in tension —
+  physical parking, the read-only quarry, §7c's running regression — it was the youngest and the only
+  one with no semantic weight. The tick and MANIFEST row already carry the park's meaning.
+- **CLAUDE.md §7c** notes the nightly quarry regression is achievable again, asserted per-commit.
+
+### Added — the real import gate (replacing a proxy, before it ever shipped)
+- **`verify.py quarry`** walks the quarry package tree and asserts the importable count against
+  `QUARRY_IMPORT_FLOOR = 792`, RED on any drop or any failing module. Wired into CI.
+- **It is deliberately not `import pricebook`.** That check was the first prescription and was
+  rejected *after measurement*: it **passes while the quarry is broken**, because the top package's
+  `__init__` does not eagerly import its sub-packages. Asserting a name resolves is not asserting the
+  property (§6, floor rule).
+- **It asserts it measured the right package.** Since the restart both trees are named `pricebook`
+  (`src/pricebook`, `quarry/pricebook`), so the walk runs rooted at `quarry/` *and* checks the
+  imported `__file__` lies under it — measuring ng would be a proxy that passes on a broken quarry.
+- **Proven to bite three ways:** re-parking one module (`core/day_count.py`) drops the count to 318
+  and fails — the v0.74.0 breakage reproduced and caught; a floor one above the true count fails; and
+  the wrong-package guard is asserted.
+
+### Added — `OPEN.md`, carried from the cluster checkpoint ruling
+`NG-DEFER-CUBEBETA` (one β for the whole cube; trigger: first per-node-β consumer) ·
+`NG-DEFER-CUBEORACLE` (the cube round-trip is rung 4; trigger: a citable vendor/textbook cube node) ·
+`NG-WATCH-TIERFLOOR` (`TEST_FLOOR` is global, not per-tier; trigger: the first tier rebalance).
+
+### Noted — the provenance gate immediately caught this slice's own consequence
+Restoring the 19 modules made 12 `quarry:` provenance headers dangle (they pointed at
+`quarry/parked/topic-*/…`, repointed there by the floor-rule slice). **`verify.py provenance` went RED
+on the next run** and the headers were repointed to the restored paths. The gate added one slice
+earlier caught the side effect of a law change the same hour — which is the whole argument for
+asserting resolution rather than presence.
+
+### Withdrawn before landing
+The earlier *atomic-park* clause (prune the `__init__` re-exports a park orphans) — measured
+insufficient: pruning all 8 dangling re-exports moved importable 318 → 329 only, since the failing
+path is direct imports, not re-exports. Audit: `docs/handoffs/AUDIT_quarry_import.md`.
+
 ## [0.115.0] - 2026-10-26
 
 **Swaption / vol-cube cluster checkpoint (§6 hard stop at a capability-cluster boundary).** Report:

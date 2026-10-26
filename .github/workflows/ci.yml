@@ -26,6 +26,10 @@ jobs:
       - run: python verify.py acyclic
       - run: python verify.py layers      # semantic layer gate (L0 finance-free)
       - run: python verify.py debt
+      # The quarry must stay IMPORTABLE: walks the tree, floors the module count (CLAUDE.md §4
+      # park-model clause + §6 floor rule). NOT `import pricebook` — that proxy passed while 265
+      # of 583 modules were broken. Ruling: docs/handoffs/rulings_quarry_park_model.md.
+      - run: python verify.py quarry
       - run: python verify.py version
       - run: python verify.py provenance
       # Signature discipline (CLAUDE.md 3b): PLR0913 max-args=5 via ruff (docs/09).

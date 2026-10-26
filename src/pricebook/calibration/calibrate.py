@@ -13,7 +13,7 @@ solved (the trial); `discount` is the discounting curve — the trial itself in 
 build (self-discounting), the already-built discount curve in the projection build.
 
 Provenance:
-  quarry: quarry/parked/topic-01-yield-curve/bootstrap.py; curves/ncurve_solver.py (InstrumentPricer pattern)
+  quarry: quarry/pricebook/curves/bootstrap.py; curves/ncurve_solver.py (InstrumentPricer pattern)
   source: docs/22 (calibrate contract); §3d (shared atoms); doc 18 §1-§3 (pillars, placement)
   oracle: every calibrating instrument reprices to par; EURIBOR swap → zero dual-curve
   slice:  cash-instruments (T1 slice 3)

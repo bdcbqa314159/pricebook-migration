@@ -103,3 +103,21 @@ floor rule's first face (CLAUDE.md §6), and it is the assertion that would have
 The never-bumped `ci.yml` comment *"Bump --layer as topics add tiers"* was the original sin. A number
 that must be remembered will eventually not be; a hard floor plus discovery removes the need to
 remember.
+
+---
+
+## The quarry import gate (added 2026-10-26 — ruling: `handoffs/rulings_quarry_park_model.md`)
+
+**`verify.py quarry` walks the quarry package tree and asserts the importable-module count against
+`QUARRY_IMPORT_FLOOR`** (currently **792**), RED on any drop, and RED if *any* module fails to import.
+
+**It is deliberately not `import pricebook`.** That check was proposed first and rejected after
+measurement: it **passes while the quarry is broken**, because the top package's `__init__` does not
+eagerly import its sub-packages — `import pricebook` was OK while `pricebook.core` and
+`pricebook.curves` raised and 265 of 583 modules were unreachable. A gate must assert the property,
+not a name that resolves (CLAUDE.md §6, the floor rule).
+
+**It also asserts it measured the right package.** Since the restart, ng and the quarry are *both*
+named `pricebook` (`src/pricebook`, `quarry/pricebook`), so the walk runs in a subprocess rooted at
+`quarry/` **and** checks that the imported package's `__file__` lies under `quarry/` — measuring ng
+here would be a proxy that passes while the quarry is broken.

@@ -19,7 +19,7 @@ The registry *view* is read-only (`CURRENCIES`/`UNITS` are `MappingProxyType`); 
 through `register_*` only (A2).
 
 Provenance:
-  quarry: quarry/parked/topic-00-foundation/currency.py
+  quarry: quarry/pricebook/core/currency.py
   source: ISO 4217 (codes + minor units); ACI Model Code
   oracle: currency-mixing rejected; same-unit-only quantity; open registration; JPY 0 minor units
   slice:  open-currency-unit (Topic 0 gate rework, S1/S4)

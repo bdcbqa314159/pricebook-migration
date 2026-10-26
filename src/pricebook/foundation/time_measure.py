@@ -6,7 +6,7 @@ map: an anchor date plus a day count. It is the only `date → t` in the tree (r
 A1, docs/19 §7) — nothing re-derives it.
 
 Provenance:
-  quarry: quarry/parked/topic-00-foundation/day_count.py (t-from-date helpers)
+  quarry: quarry/pricebook/core/day_count.py (t-from-date helpers)
   source: docs/19 §7 (TimeMeasure anchor, ruling A1); ISDA 2006 §4.16 day counts
   oracle: year_fraction(anchor) == 0; agrees with the L0 year_fraction primitive
   slice:  swap-to-zero-npv (T1 slice 1)
