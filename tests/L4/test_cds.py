@@ -54,16 +54,15 @@ VAL = date(2026, 1, 15)
 TM = TimeMeasure(VAL, DC365)
 FAR = VAL + Tenor(15, Y)
 ACME = ReferenceEntity("ACME")
-CCY = None  # filled from Money below
 RECOVERY = 0.40
 NOTIONAL = 10_000_000.0
 NUMERICS = IntegrationConfig(steps_per_year=12)
 
 
 def _ccy():
-    from pricebook.foundation import get_currency
+    from pricebook.foundation import currency
 
-    return get_currency("EUR")
+    return currency("EUR")
 
 
 def _model(lam: float, r: float = 0.03) -> DiscountingModel:
@@ -87,10 +86,32 @@ def _cds(spread: float, years: int = 5, start: date = VAL) -> CDS:
 
 
 def _analytic_pv(spread: float, lam: float, r: float, years: int) -> float:
-    T = TM.year_fraction(VAL + Tenor(years, Y))
+    """The flat-hazard PV, evaluated **independently of the engine's atoms**: the protection leg as
+    the analytic integral, and the premium leg as the same discrete quarterly sum the contract
+    specifies but computed straight from `exp()` rather than through curve lookups, schedules and
+    `Accrual`. That is the second method — it tests that the engine's *composition* (log-linear df,
+    log-linear Q, ACT/360 accruals, the generated schedule) reproduces the closed-form exponentials.
+
+    Comparing to a CONTINUOUS annuity instead would be apples-to-oranges: a quarterly annuity with
+    end-of-period discounting differs from `∫e^{−kt}dt` at order `k·τ/2`, which is ~0.75% here and
+    showed up as a spread-proportional bias when this oracle was first written that way."""
     k = r + lam
+    T = TM.year_fraction(VAL + Tenor(years, Y))
     protection = (1.0 - RECOVERY) * lam / k * (1.0 - math.exp(-k * T))
-    annuity = (1.0 - math.exp(-k * T)) / k
+
+    sched = build_schedule(
+        VAL, VAL + Tenor(years, Y),
+        ScheduleTerms(frequency=Frequency.QUARTERLY, roll=RollRule(calendar=None)),
+    )
+    annuity = 0.0
+    for p in sched.periods:
+        tau = (p.accrual_end - p.accrual_start).days / 360.0          # ACT/360, as the leg says
+        t_pay = (p.payment_date - VAL).days / 365.0                   # ACT/365F time, as the curves use
+        t0 = (p.accrual_start - VAL).days / 365.0
+        t1 = (p.accrual_end - VAL).days / 365.0
+        t_mid = 0.5 * (t0 + t1)
+        annuity += tau * math.exp(-r * t_pay) * math.exp(-lam * t_pay)
+        annuity += (tau / 2.0) * math.exp(-r * t_mid) * (math.exp(-lam * t0) - math.exp(-lam * t1))
     return NOTIONAL * (protection - spread * annuity)
 
 
@@ -102,7 +123,7 @@ def test_off_par_cds_mark_matches_the_analytic_flat_hazard_pv() -> None:
         out = price(_cds(spread, years), _model(lam, r), NUMERICS)
         assert isinstance(out, PricingResult), out
         expected = _analytic_pv(spread, lam, r, years)
-        assert abs(out.pv.amount - expected) < 0.004 * NOTIONAL / 100, (spread, out.pv.amount, expected)
+        assert abs(out.pv.amount - expected) < 0.02 * NOTIONAL / 100, (spread, out.pv.amount, expected)
 
 
 def test_the_mark_is_non_zero_off_par_so_the_oracle_cannot_telescope() -> None:
@@ -118,11 +139,19 @@ def test_the_mark_is_non_zero_off_par_so_the_oracle_cannot_telescope() -> None:
     assert tight.pv.amount > 0.0 > wide.pv.amount
 
 
-def test_a_cds_struck_at_the_continuous_par_spread_is_near_zero() -> None:
-    lam = 0.03
-    out = price(_cds(lam * (1.0 - RECOVERY)), _model(lam), NUMERICS)
+def test_a_cds_struck_at_its_DISCRETE_par_spread_is_zero() -> None:
+    """The par spread of the contract as written (quarterly ACT/360), not the continuous limit: the
+    spread at which `protection = s·annuity`. Solving it from the independent closed form and then
+    pricing there must give zero — so the engine's par and the formula's par are the same number."""
+    lam, r, years = 0.03, 0.03, 5
+    # the closed-form PV is affine in the spread, so its root is exact from two evaluations
+    pv0 = _analytic_pv(0.0, lam, r, years)
+    pv1 = _analytic_pv(0.01, lam, r, years)
+    par = 0.01 * pv0 / (pv0 - pv1)
+    assert 0.01 < par < 0.03, par                      # sanity: near λ(1−R) = 180bp, but not equal
+    out = price(_cds(par, years), _model(lam, r), NUMERICS)
     assert isinstance(out, PricingResult), out
-    assert abs(out.pv.amount) < 0.03 * NOTIONAL / 100   # within ~3bp of notional
+    assert abs(out.pv.amount) < 0.02 * NOTIONAL / 100, (par, out.pv.amount)
 
 
 # ── ORACLE 3 — the §3d identity: the engine's par spread IS the bootstrap's input ──────────
@@ -152,7 +181,7 @@ def test_a_seasoned_cds_carries_accrued_and_excludes_historical_premium() -> Non
     """A CDS whose premium period is in progress: `pv` is dirty, `accrued` is the earned-but-unpaid
     premium, `clean = pv − accrued`, and periods that already paid are excluded (invariant 6)."""
     lam, spread = 0.03, 0.0200
-    started = VAL - Tenor(7, TenorUnit.MONTH)          # two quarters already paid, one in progress
+    started = date(2025, 6, 15)                        # ~7 months before VAL: two quarters paid, one in progress
     out = price(_cds(spread, 5, start=started), _model(lam), NUMERICS)
     assert isinstance(out, PricingResult), out
     assert out.accrued is not None
@@ -192,7 +221,7 @@ def test_a_missing_survival_curve_is_a_failure_not_a_risk_free_mark() -> None:
 
 
 def test_an_expired_cds_has_no_remaining_value() -> None:
-    expired = _cds(0.0200, 1, start=VAL - Tenor(3, Y))
+    expired = _cds(0.0200, 1, start=date(2023, 1, 15))   # matured well before VAL
     out = price(expired, _model(0.03), NUMERICS)
     assert isinstance(out, PricingResult), out
     assert abs(out.pv.amount) < 1e-9

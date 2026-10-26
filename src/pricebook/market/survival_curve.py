@@ -86,11 +86,14 @@ class SurvivalCurve:
 
     def survival(self, d: date) -> float:
         """`Q(d)`, log-linear in Q between pillars (= piecewise-constant hazard)."""
-        t = self.measure.year_fraction(d)
-        if t < 0.0:
-            raise ValueError(f"survival before the valuation date is undefined; t={t}")
-        if t == 0.0:
+        if d <= self.measure.anchor:
+            # Survival to a PAST date is certain: we are pricing a live entity, so by construction
+            # it did not default before today. This is not leniency — it is the boundary condition
+            # `Q(t) = 1 for t ≤ 0`, and a seasoned CDS needs it: the accrual-on-default term of the
+            # period IN PROGRESS reads `Q(accrual_start)` with that start behind the valuation date.
+            # (`hazard` still refuses a past date — there is no hazard defined off the curve.)
             return 1.0
+        t = self.measure.year_fraction(d)
         if t > self.times[-1]:
             raise ValueError(
                 f"t={t} is past the last survival pillar {self.times[-1]} "
@@ -109,6 +112,20 @@ class SurvivalCurve:
         i = self._segment(max(t, 0.0))
         dt = self.times[i + 1] - self.times[i]
         return -(math.log(self.survivals[i + 1]) - math.log(self.survivals[i])) / dt
+
+    def default_prob(self, d: date) -> float:
+        """`P(default by d) = 1 − Q(d)`. Forward-linked from slice 1 as needed-now by the CDS
+        engine; it is one subtraction, so it is a read on the curve rather than a new atom."""
+        return 1.0 - self.survival(d)
+
+    def conditional_survival(self, start: date, end: date) -> float:
+        """`Q(end | start) = Q(end)/Q(start)` — survival to `end` GIVEN survival to `start`. This
+        is the Markov property the protection leg's per-step increments already rely on, named so a
+        seasoned mark can state it rather than re-deriving the ratio inline."""
+        q_start = self.survival(start)
+        if q_start <= 0.0:
+            raise ValueError(f"conditional survival is undefined from a zero-survival date {start}")
+        return self.survival(end) / q_start
 
     def bumped(self, shift: float) -> SurvivalCurve:
         """Shift the HAZARD by `shift` at every pillar — the credit-spread bump. Shifting Q
