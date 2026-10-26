@@ -6,7 +6,7 @@ to new products, never a growing `if/elif`. It lives inside L4 (no leaky top-lev
 `registry.py`). An unregistered product is a value (`PricingFailure`), never a raise.
 
 Provenance:
-  quarry: quarry/pricebook/pricing/registry.py
+  quarry: quarry/pricebook/registry.py
   source: CLAUDE.md §1 (engine registry inside L4; no isinstance ladders)
   oracle: slice-1/2 par-swap-to-zero still green through the registry-dispatched engine
   slice:  cash-instruments (T1 slice 3, Step A)

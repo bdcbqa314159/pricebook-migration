@@ -14,7 +14,7 @@ tuple of declarative holiday `Rule`s — and each market is a *declaration* (see
 not the key). The per-rule `observe` flag is lifted to the calendar's `Observance`.
 
 Provenance:
-  quarry: quarry/pricebook/core/calendar.py
+  quarry: quarry/parked/topic-00-foundation/calendar.py
   source: 5 U.S.C. §6103 (US) · UK Banking and Financial Dealings Act 1971 ·
           NZ Holidays Act 2003 · Japanese furikae kyūjitsu · Colombian Ley Emiliani
   oracle: published holiday & observance dates per market (test_calendars)

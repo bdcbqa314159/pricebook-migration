@@ -9,7 +9,7 @@ map, ruling A1). doc 19's typed `CurveSet` (discount·projection·survival·…)
 with its second curve family at multicurve (rule of two).
 
 Provenance:
-  quarry: quarry/pricebook/core/discount_curve.py
+  quarry: quarry/parked/topic-01-yield-curve/discount_curve.py
   source: docs/19 (CurveHandle · CurveSet); log-linear discount-factor interpolation
   oracle: flat-curve df(t) = exp(-r·t) to 1e-12; par swap reprices to zero NPV
   slice:  swap-to-zero-npv (T1 slice 1)

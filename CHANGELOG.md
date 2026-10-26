@@ -11,6 +11,55 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.113.0] - 2026-10-26
+
+**The floor rule — §6's second clause now binds the verification apparatus** (Cowork ruling:
+`docs/handoffs/rulings_floor_rule.md`, answering thread 0001+0002). Apparatus only; no pricing logic
+and no oracle expected value touched. Drawdown unchanged at 22 / 793.
+
+### Changed — the law
+- **CLAUDE.md §6, structural-oracle rule, second clause replaced.** *A gate's green is evidence only
+  if the gate also asserts a floor on what it examined; green over an unknown, empty, or truncated
+  population is not green.* Two faces: **floor-on-population** (any check that filters, collects or
+  iterates asserts a minimum count of survivors — a count, not "green") and
+  **resolve-don't-just-exist** (a presence check must dereference what it names). Ruled an
+  **amendment**, not an application already implied: three instances passed through ratification and
+  none was read as covered, so "already implied" would be revisionism.
+- Precedent recorded as three instances of one shape — audit #10 (caplet grid ≠ quote grid),
+  `--layer 0` (177 of 366 tests for six slices), `provenance` (17 of 45 paths dangling, two wrong
+  since written).
+
+### Added — the gates that enforce it
+- **`verify.py TEST_FLOOR = 366`**, asserted by `verify.py tests` on the un-truncated run; CI **RED**
+  below it. Verified to bite: floor at 367 → exit 1; at 366 → exit 0; and `--layer 0` collects 177,
+  so the assertion would have caught the original defect. A slice adding a tier raises it in the same
+  commit.
+- **`verify.py provenance` now dereferences every `quarry:` path** (file or directory), and RED-fails
+  if it examines an empty population. `quarry: —` is the explicit no-ancestor form.
+- **`docs/11`** oracle-quality audit gains: *confirm every gate asserts a floor on what it collected
+  or resolved, not merely that it ran green.* Docs **09** and **10** carry the per-gate obligations.
+
+### Fixed — `OPEN.md` NG-DEFER-PROV DISCHARGED
+17 unresolvable provenance paths, all three failure modes: **10** repointed under
+`quarry/parked/topic-*/` (physically parked at a topic close — doc 13 parking is a `git mv`); **2**
+wrong sub-directories (`pricing/registry.py`→`registry.py`,
+`models/vol_surface.py`→`options/vol_surface.py`); **2** naming a file that never existed
+(`fixed_income/interest_rate_swap.py`→`fixed_income/swap.py`); and `risk/priceable.py` has **no**
+quarry ancestor — `Priceable` is an ng design construct (§1) — now `quarry: —`.
+
+### Added — records
+- `docs/handoffs/record_window_20_25_cleared.md` — the slices-20–25 window **cleared by execution**:
+  three CI runs × two OSes, **366 passed** each. The ruling could not clear it; only running it could.
+- `docs/handoffs/AUDIT_swaption_vol_cube.md` — slice B's scoping pass (9 findings; `bumped()` verified
+  5.43–6.19× over-bump, the ATM-interpolation atom duplicated with one copy raising `IndexError`).
+- `OPEN.md` **NG-DEFER-QUARRYIMPORT** — the quarry no longer imports (parking orphaned
+  `core/__init__`'s re-exports), so §7c's nightly quarry regression is currently unachievable.
+
+### Re-anchored
+`docs/23_repo_restart.md` A3 and `OPEN.md` NG-DEFER-PROV now derive from the ruling rather than from
+Code's judgement — the criteria are unchanged, their authority moved from judgement to law.
+
+
 ## [0.112.0] - 2026-10-25
 
 **Repo restart (artifact 23) — the tree is restructured and the test gate is closed.** No pricing

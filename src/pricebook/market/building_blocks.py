@@ -12,7 +12,7 @@ pay lag the per-period sum equals the telescoping identity `df(start₀) − df(
 rounding). There is no separate telescoping code path (that would be a §3d exception).
 
 Provenance:
-  quarry: quarry/pricebook/fixed_income/interest_rate_swap.py (annuity / swap PV / forwards)
+  quarry: quarry/pricebook/fixed_income/swap.py (annuity / swap PV / forwards)
   source: CLAUDE.md §3d (shared atoms); multicurve leg PV = Σ df_disc·τ·L_proj
   oracle: EURIBOR swap → zero NPV dual-curve; float leg degenerates to df0 − dfN
   slice:  dual-curve-euribor-estr (T1 slice 2)

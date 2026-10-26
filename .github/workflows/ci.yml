@@ -34,6 +34,9 @@ jobs:
       # numpy/scipy — a pyright bump can surface new diagnostics, so the version is part of the
       # reproducibility contract. Node is preinstalled on ubuntu + windows runners.
       - run: npx -y pyright@1.1.411
-      # Every layer dir present, by discovery — no --layer ceiling to remember.
-      # The old `--layer 0` gated 177 of 366 tests for six slices (artifact 23, A3).
+      # Every layer dir present, by discovery — no --layer ceiling to remember — AND the
+      # collected count is held to verify.py's committed TEST_FLOOR, RED below it (the floor
+      # rule, CLAUDE.md §6; ruling docs/handoffs/rulings_floor_rule.md). The old `--layer 0`
+      # gated 177 of 366 tests for six slices. A slice that adds a tier raises TEST_FLOOR in
+      # the same commit; green over a truncated collection is not green.
       - run: python verify.py tests

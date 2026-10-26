@@ -7,7 +7,8 @@ model constructor, so a bumped `MarketSnapshot` reprices it: `market ↦ price(i
 model_ctor(market))`. Generic over every product the engine knows — a new product needs no risk code.
 
 Provenance:
-  quarry: quarry/pricebook/risk/priceable.py (the snapshot→PV protocol — design reference only)
+  quarry: — (no ancestor: the quarry has no Priceable/Pricable concept; this protocol is an ng
+          design construct, CLAUDE.md §1 risk@L5 + no-isinstance)
   source: CLAUDE.md §1 (risk@L5, Priceable, no-isinstance); docs/18 §C3 (risk cluster)
   oracle: DV01 vs analytic curve delta; vega vs closed-form Black vega — priced through this
   slice:  risk-greeks (C3 opening)

@@ -5,7 +5,7 @@ a declaration here — never a code change. Currency → calendar is a lookup
 (`calendar_for_currency`), not the registry key (C1).
 
 Provenance:
-  quarry: quarry/pricebook/core/calendar.py (the currency-keyed registry + specs)
+  quarry: quarry/parked/topic-00-foundation/calendar.py (the currency-keyed registry + specs)
   source: national holiday statutes (see calendar.py); market conventions per centre
   oracle: published holiday & observance dates per market (test_calendars)
   slice:  calendars (Topic 0 S1)
