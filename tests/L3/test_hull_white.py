@@ -181,10 +181,14 @@ def test_the_engine_reproduces_hull_whites_own_swaption_price_at_its_implied_vol
 
 
 def test_hull_white_satisfies_the_swaption_capability_structurally() -> None:
-    from pricebook.models.protocols import CalibratedModel, SwaptionVol
+    """HW is a `SwaptionPrice`, **not** a `SwaptionVol` — the correction the capability slice
+    made. A Gaussian model prices a *contract*; it does not quote a surface, and being asked for
+    one is what forced the reconstruction this slice deleted."""
+    from pricebook.models.protocols import CalibratedModel, SwaptionPrice, SwaptionVol
 
     hw = _hw()
-    assert isinstance(hw, SwaptionVol)
+    assert isinstance(hw, SwaptionPrice)
+    assert not isinstance(hw, SwaptionVol)
     assert isinstance(hw, CalibratedModel)
 
 
@@ -210,25 +214,23 @@ def test_swaption_payer_receiver_parity_is_the_forward_swap() -> None:
         assert abs((payer - receiver) - annuity * (s - strike)) < 1e-8, strike
 
 
-def test_a_NON_CANONICAL_underlying_is_REFUSED_rather_than_mispriced_by_381bp() -> None:
-    """**The slice's STOP, asserted as a guard.** A Gaussian model's swaption price depends on the
-    underlying's whole coupon flow set, but `SwaptionVol`'s key is `(index, expiry, swap_tenor,
-    strike)` — which cannot carry the fixed leg's frequency or day counts. Measured: a semi-annual
-    underlying is mispriced by **381bp relative**; the annual one HW guesses agrees to 0.0bp.
+def test_the_SEMI_ANNUAL_underlying_that_cost_381bp_now_prices_EXACTLY() -> None:
+    """**The inversion of this slice's STOP.** This test previously asserted a *refusal*: under
+    `SwaptionVol`, whose key `(index, expiry, swap_tenor, strike)` cannot carry a fixed leg's
+    frequency, HW had to reconstruct an underlying — and the reconstruction mispriced a
+    semi-annual swap by **381bp relative**. The threaded forward made that detectable, so the
+    case failed loudly instead of returning a wrong vol.
 
-    The threaded forward makes it *detectable*: HW computes the `S` of its reconstruction and
-    refuses when it disagrees with the engine's marked `S`. So the unsound case is a failure, never
-    a silently wrong vol — ML-D1's lesson applied as a guard while the protocol question is ruled."""
+    `SwaptionPrice` takes the **actual swap**, so there is nothing to reconstruct and nothing to
+    guess. The 381bp is not caught here — it is **unwritable**. The engine now agrees with HW's
+    own closed form to 1e-9 on the very case that used to be refused."""
     hw = _hw()
     swap = _swap(0.030, freq=Frequency.SEMI_ANNUAL)
 
-    # HW's OWN closed form is fine — the defect is the capability's key, not the maths
-    assert hw.swaption_price(swap, EXPIRY, OptionType.CALL) > 0.0
-
+    own = hw.swaption_price(swap, EXPIRY, OptionType.CALL)
     out = price(Swaption(swap, EXPIRY, OptionType.CALL), hw)
-    assert isinstance(out, PricingFailure), out
-    assert "reconstruct" in out.reason
-    assert "bp apart" in out.reason          # the reason carries the measurement, not just a verdict
+    assert isinstance(out, PricingResult), out
+    assert abs(out.pv.amount - own) < 1e-9 * max(1.0, abs(own)), (out.pv.amount, own)
 
 
 def test_the_canonical_underlying_still_agrees_exactly() -> None:

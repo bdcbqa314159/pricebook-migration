@@ -97,11 +97,14 @@ def test_the_reconstruction_machinery_is_DELETED() -> None:
     """Make-it-unwritable, the `ProtectionWindow` pattern. A fallback left in place is a fallback
     someone reaches for: the guess and its guard are removed, and their absence is asserted so the
     next reader cannot reintroduce them without this failing."""
-    assert not hasattr(HullWhite, "_pending_swap")
-    assert not hasattr(HullWhite, "swaption_vol")
-    source = inspect.getsource(HullWhite)
-    assert "reconstruct" not in source.lower() or "no longer" in source.lower()
-    assert "_S_IDENTITY_TOL" not in inspect.getsource(inspect.getmodule(HullWhite))
+    # Assert the MACHINERY is gone, not the vocabulary: the module still *explains* why the
+    # reconstruction was removed, and a word-grep would flag that prose — the same false positive
+    # the debt gate hits when a comment mentions a suppression. Structure is the thing to check.
+    assert not hasattr(HullWhite, "_pending_swap")       # the guess
+    assert not hasattr(HullWhite, "swaption_vol")        # the capability that forced it
+    module = inspect.getmodule(HullWhite)
+    assert not hasattr(module, "_S_IDENTITY_TOL")        # the guard the guess needed
+    assert not hasattr(HullWhite, "vol_law")             # and the Black-vol inversion with it
 
 
 def test_hull_white_satisfies_SwaptionPrice_and_no_longer_claims_SwaptionVol() -> None:

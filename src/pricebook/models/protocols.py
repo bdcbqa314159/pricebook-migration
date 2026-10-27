@@ -27,6 +27,8 @@ from typing import Protocol, runtime_checkable
 
 from pricebook.foundation import RateIndex, Tenor
 from pricebook.market.snapshot import MarketSnapshot
+from pricebook.products.option import OptionType
+from pricebook.products.swap import VanillaSwap
 from pricebook.models.vol_law import VolLaw
 
 
@@ -68,6 +70,31 @@ class ImpliedVol(CalibratedModel, Protocol):
     def implied_vol(
         self, index: RateIndex, expiry: date, strike: float, forward: float
     ) -> float: ...
+
+
+@runtime_checkable
+class SwaptionPrice(CalibratedModel, Protocol):
+    """The swaption-**pricing** capability — for models that price the contract directly, rather
+    than quoting a vol for the engine's Black formula to consume.
+
+    **Why it is a sibling of `SwaptionVol` and not a variant of it.** A surface model (Black, SABR)
+    reads a vol off a surface, and `(index, expiry, swap_tenor, strike)` is exactly the right key for
+    that. A **short-rate model is not a surface**: Hull-White prices a European swaption by
+    Jamshidian — one zero-bond option per coupon flow — so its price depends on the underlying's
+    whole **flow set**: the fixed leg's frequency, its day counts, its schedule. None of that is in
+    the key. Forced through `SwaptionVol`, HW had to *reconstruct* an underlying, and the
+    reconstruction was wrong by **381bp** on a semi-annual swap
+    (`AUDIT_hull_white_capability.md`) — ML-D1 again, an order of magnitude past slice A's 48.8bp.
+
+    So this capability takes the **actual `swap`**. There is nothing to reconstruct, nothing to
+    guard, and the 381bp is unwritable rather than detected — the same move `ProtectionWindow` made
+    for the protection leg's day count.
+
+    The engine prefers this capability and falls back to `SwaptionVol` + the law, by structural
+    protocol membership — no `isinstance` on a concrete model, exactly as `ImpliedVol`/`SwaptionVol`
+    are already chosen."""
+
+    def swaption_price(self, swap: VanillaSwap, expiry: date, kind: OptionType) -> float: ...
 
 
 @runtime_checkable
