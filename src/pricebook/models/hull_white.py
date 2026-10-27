@@ -29,8 +29,10 @@ Provenance:
           (the A/B form and Jamshidian's decomposition); Jamshidian (1989)
   oracle: P_HW(0,T) == curve DF to 1e-12 at every pillar and every (a, σ); zero-bond call/put parity;
           swaption payer/receiver parity against the linear atoms; the engine reproduces HW's own
-          Jamshidian price at HW's implied vol (the §3d cross-model identity); σ→0 and a→0 limits
-  slice:  hull-white (B7 prerequisite — the first simulatable dynamics, static half)
+          Jamshidian price to 1e-9 for ANNUAL and SEMI-ANNUAL underlyings alike (the §3d identity —
+          the semi-annual leg of it is what the 381bp reconstruction used to break); σ→0, a→0 limits
+  slice:  hull-white (B7 prerequisite — the first simulatable dynamics, static half);
+          swaption-price-capability (v0.129.0 — HW became a `SwaptionPrice`, not a `SwaptionVol`)
 """
 
 from __future__ import annotations
@@ -58,9 +60,6 @@ _DF_WINDOW = 1.0 / 365.0
 #: Bracket for Jamshidian's `r*`. Wide enough for distressed and negative-rate regimes alike; the
 #: solve fails as a value outside it rather than returning a bracket end.
 _R_STAR_BRACKET = (-0.50, 1.00)
-#: How far HW's reconstructed forward may sit from the engine's marked S before the
-#: reconstruction is declared wrong. 0.1bp — far below the 381bp a frequency mismatch costs.
-_S_IDENTITY_TOL = 1e-5
 
 
 @dataclass(frozen=True)
@@ -84,57 +83,14 @@ class HullWhite:
             raise ValueError(f"Hull-White sigma must be non-negative; got {self.sigma}")
 
     # ── the capability the engine dispatches on ───────────────────────────────────────────
-    @property
-    def vol_law(self) -> VolLaw:
-        """HW quotes its prices as **Black** vols, because that is the unit the engine's swaption
-        path speaks. The dynamics are Gaussian; the quoting convention is lognormal, and the
-        inversion in `swaption_vol` is what reconciles them."""
-        return Lognormal()
-
-    def swaption_vol(
-        self, index: RateIndex, expiry: date, swap_tenor: Tenor, strike: float, forward: float
-    ) -> float:
-        """The Black vol that makes the engine's formula reproduce HW's own Jamshidian price.
-
-        **This path is sound only when HW can reconstruct the actual underlying, and it checks that
-        rather than assuming it.** A Gaussian model's swaption price depends on the underlying's
-        *whole coupon flow set* (Jamshidian decomposes into one option per flow), but this
-        capability's key is `(index, expiry, swap_tenor, strike)` — which cannot express the fixed
-        leg's frequency or day counts. Measured: on a semi-annual underlying the reconstruction is
-        wrong by **381bp relative**; on the annual one it guesses, 0.0bp. That is ML-D1 again, and an
-        order of magnitude larger than slice A's 48.8bp forward gap, because here the whole flow set
-        is mis-stated rather than one rate.
-
-        **The threaded forward is what makes it detectable.** The engine passes the contract's true
-        `S = float_leg_pv/rpv01`; HW computes the `S` of its *reconstruction* and refuses when they
-        disagree. So a mis-reconstruction is a failure value, never a silently wrong vol — the
-        guard cannot make the capability sufficient, but it can keep it honest until the protocol
-        question is ruled (see `AUDIT_hull_white_capability.md`)."""
-        swap = self._pending_swap(index, expiry, swap_tenor, strike)
-        discount = self._discount()
-        projection = self.market.curves.projection(index)
-        annuity = rpv01(swap.fixed_leg.schedule, swap.fixed_leg.day_count, discount)
-        if annuity <= 0.0:
-            raise ValueError("the swaption's annuity is non-positive; nothing to normalise by")
-        implied_s = (
-            float_leg_pv(swap.float_leg.schedule, swap.float_leg.day_count, discount, projection)
-            / annuity
-        )
-        if abs(implied_s - forward) > _S_IDENTITY_TOL:
-            raise ValueError(
-                f"Hull-White cannot reconstruct this swaption's underlying from "
-                f"(index, expiry, {swap_tenor}, strike): its reconstruction implies "
-                f"S={implied_s!r} but the engine marked S={forward!r} "
-                f"({abs(implied_s - forward) * 1e4:.2f}bp apart). A short-rate model needs the "
-                "contract's own flow set, which this capability's key cannot carry — the gap is "
-                "measured and ruled in docs/handoffs/AUDIT_hull_white_capability.md."
-            )
-        kind = OptionType.CALL if strike <= forward else OptionType.PUT
-        price = self.swaption_price(swap, expiry, kind)
-        t = self._years(expiry)
-        if kind is OptionType.PUT:  # invert on the CALL, via the parity the inverter expects
-            price = price + annuity * (forward - strike)
-        return implied_vol(self.vol_law, price / annuity, forward, strike, t)
+    #
+    # HW satisfies `SwaptionPrice`, NOT `SwaptionVol`, and that is the whole correction of this
+    # slice. `SwaptionVol` is keyed by `(index, expiry, swap_tenor, strike)` — right for a model
+    # that reads a surface, wrong for one that prices a contract: Jamshidian needs the underlying's
+    # whole coupon flow set, which the key cannot carry. Forced through it, HW had to reconstruct a
+    # swap, and the reconstruction was wrong by **381bp** on a semi-annual underlying. The
+    # reconstruction, its S-identity guard, and the Black-vol inversion are all **deleted** — there
+    # is nothing left to guess, so the defect is unwritable rather than detected.
 
     # ── the closed forms ──────────────────────────────────────────────────────────────────
     @property
@@ -271,24 +227,3 @@ class HullWhite:
             return 0.0
         decay = (1.0 - math.exp(-2.0 * self.a * expiry)) / (2.0 * self.a)
         return self.sigma * self.b(expiry, maturity) * math.sqrt(decay)
-
-    def _pending_swap(
-        self, index: RateIndex, expiry: date, swap_tenor: Tenor, strike: float
-    ) -> VanillaSwap:
-        """The underlying the capability was asked about, rebuilt from the key the engine passes.
-
-        **This is the one place HW must guess**, because `swaption_vol`'s signature carries the key
-        (index, expiry, tenor, strike) and not the contract — the same gap slice A measured at 48.8bp
-        for the *forward*. It is safe here only because the forward is threaded in separately and the
-        annuity is recomputed from this schedule consistently on both sides of the inversion, so the
-        guess cancels. A capability that passed the contract would remove it; that is a protocol
-        change and so a ruled decision, not a patch."""
-        from pricebook.foundation import Frequency, RollRule, ScheduleTerms, build_schedule
-        from pricebook.products.swap import FixedLeg, FloatLeg
-
-        sched = build_schedule(
-            expiry, expiry + swap_tenor,
-            ScheduleTerms(frequency=Frequency.ANNUAL, roll=RollRule(calendar=None)),
-        )
-        dc = DayCountConvention.ACT_365_FIXED
-        return VanillaSwap(1.0, self.currency, FixedLeg(sched, dc, strike), FloatLeg(sched, dc, index))

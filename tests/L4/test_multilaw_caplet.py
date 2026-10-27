@@ -197,5 +197,9 @@ def test_pricer_has_no_law_switch() -> None:
     assert names.isdisjoint({"Lognormal", "ShiftedLognormal", "Normal", "VolLawKind", "vol_law_for"})
     for line in src.splitlines():
         if "isinstance(" in line:  # the CALL, not the word in prose
-            allowed = ("ImpliedVol", "SwaptionVol", "PricingFailure")  # capability checks + #4
+            # capability protocols + invariant #4. `SwaptionPrice` joins as of the capability
+            # slice: it IS a capability (a protocol on what the model can DO), so it belongs
+            # here — the law this test guards is "no branching on a concrete model or a law",
+            # not "no isinstance".
+            allowed = ("ImpliedVol", "SwaptionVol", "SwaptionPrice", "PricingFailure")
             assert any(a in line for a in allowed), f"non-capability isinstance: {line.strip()}"

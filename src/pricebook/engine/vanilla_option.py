@@ -40,7 +40,12 @@ from pricebook.foundation import (
 )
 from pricebook.market.building_blocks import float_leg_pv, forward, rpv01
 from pricebook.models.black import vol_time_measure
-from pricebook.models.protocols import CalibratedModel, ImpliedVol, SwaptionVol
+from pricebook.models.protocols import (
+    CalibratedModel,
+    ImpliedVol,
+    SwaptionPrice,
+    SwaptionVol,
+)
 from pricebook.products.option import CapFloor, Caplet, Swaption, cap_ladder
 from pricebook.products.swap import VanillaSwap
 
@@ -117,8 +122,18 @@ def price_swaption(swaption: Swaption, model: CalibratedModel) -> PricingResult 
     numeraire) and `float_leg_pv` (→ forward swap rate `S = float_leg_pv/annuity`) — never the
     calibrator's private `_par_rate` — so engine and calibrator cannot disagree (§3d).
     PV = N·annuity·law.price(S, K, ·)."""
+    # Two capabilities answer a swaption, and the engine chooses by protocol MEMBERSHIP, never by
+    # naming a model (§1). `SwaptionPrice` is preferred because it receives the contract: a model
+    # that prices directly (Hull-White's Jamshidian) needs the underlying's whole flow set, which
+    # `SwaptionVol`'s surface key cannot carry — forcing it through the vol path mispriced a
+    # semi-annual underlying by 381bp (AUDIT_hull_white_capability.md). A surface model has no such
+    # need and keeps the vol path, byte-identically.
+    if isinstance(model, SwaptionPrice):
+        return _price_swaption_directly(swaption, model)
     if not isinstance(model, SwaptionVol):  # capability check — a protocol, not a concrete-type ladder
-        return PricingFailure("swaption requires a model with the SwaptionVol capability")
+        return PricingFailure(
+            "swaption requires a model with the SwaptionPrice or SwaptionVol capability"
+        )
     swap = swaption.swap
     index = swap.float_leg.index
     currency = swap.currency
@@ -149,4 +164,30 @@ def price_swaption(swaption: Swaption, model: CalibratedModel) -> PricingResult 
     except (ValueError, KeyError, ZeroDivisionError) as exc:
         return PricingFailure(str(exc))
     pv = swap.notional * annuity * law.price(s, strike, vol, t, swaption.option_type)
+    return PricingResult(pv=Money(pv, currency))
+
+
+def _price_swaption_directly(
+    swaption: Swaption, model: SwaptionPrice
+) -> PricingResult | PricingFailure:
+    """Mark a swaption through a model that prices the contract itself.
+
+    The model receives the **actual swap**, so the engine adds nothing but the invariant-6 guards it
+    owns: an expired swaption has no optional value (#20), and a seasoned underlying's current
+    period is a failure rather than a silent mis-accrual (#3a). The money and its currency are the
+    engine's to state, as for every other product."""
+    swap = swaption.swap
+    currency = swap.currency
+    vd = model.market.valuation_date
+    if swaption.expiry <= vd:
+        return PricingResult(pv=Money(0.0, currency))
+    fixed_sched = future_periods(swap.fixed_leg.schedule, vd)
+    if fixed_sched.periods:
+        seasoned = current_period_failure(fixed_sched.periods[0].accrual_start, vd)
+        if seasoned is not None:
+            return seasoned
+    try:
+        pv = model.swaption_price(swap, swaption.expiry, swaption.option_type)
+    except (ValueError, KeyError, ZeroDivisionError) as exc:
+        return PricingFailure(str(exc))
     return PricingResult(pv=Money(pv, currency))

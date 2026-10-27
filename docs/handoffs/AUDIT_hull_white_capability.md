@@ -61,3 +61,31 @@ rejected: a model that refuses every semi-annual swaption is not a model.
 The curve fit, the bond, the zero-bond option, Jamshidian itself, and every limit are independent of
 this question — they are the model, and they are oracled. Only the *capability wiring* is open. MC
 (the next slice) consumes `HullWhite`'s dynamics, not its `swaption_vol`, so this does not block it.
+
+---
+
+## 5. CLOSED — v0.129.0, by option A
+
+Ruled option **A** (Cowork thread 0038; fork confirmed by Bernardo at the B7 checkpoint). Landed in
+the `SwaptionPrice` capability slice:
+
+- `SwaptionPrice.swaption_price(swap, expiry, kind)` added at `models/protocols.py` — takes the
+  **actual swap**, so there is no flow set to infer.
+- `HullWhite` now satisfies `SwaptionPrice` and **not** `SwaptionVol`. `swaption_vol`,
+  `_pending_swap` and `_S_IDENTITY_TOL` are **deleted** — the reconstruction, the threaded-forward
+  guard, and the Black-vol inversion all go together.
+- The engine prefers the price capability and falls back to vol + law, by protocol membership. The
+  no-law-switch AST test allowlists `SwaptionPrice` as a capability, so the §1 no-`isinstance`-ladder
+  law still binds.
+
+**The finding is not fixed, it is unwritable.** The 381bp case is now an *equality* oracle rather
+than a refusal: `test_the_SEMI_ANNUAL_underlying_that_cost_381bp_now_prices_EXACTLY` asserts the
+engine agrees with HW's own closed form to 1e-9 on the very contract that used to fail. Black and
+SABR are **byte-identical** across all 32 captured points.
+
+**One defect found during the change, worth recording** because the runtime check was the misleading
+one: inserting the new protocol between `@runtime_checkable` and `class SwaptionVol` silently stole
+that decorator. `getattr(SwaptionVol, "_is_runtime_protocol")` still reported `True` — the flag is
+**inherited** from `CalibratedModel` — so the runtime probe said fine while pyright said broken.
+Pyright was right. A capability check against a non-runtime protocol raises at the first dispatch,
+i.e. it would have been a production `TypeError`, not a type-checker nit.
