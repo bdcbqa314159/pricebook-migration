@@ -341,6 +341,28 @@ the whole spine, and a sibling to §1's no-`isinstance` law.
   check **constructor kwargs**, **dict/string keys**, `getattr`, `**kwargs` forwarding, and
   **serialisation round-trips**. Anything reachable dynamically is **not** `dead`. The shed-list
   records *how* it was verified (patterns + hit counts), not just the verdict.
+- **A TEST-ONLY omission never blocks a tick, but is never silently shed either** (ruled 2026-10-27;
+  ruling `docs/handoffs/rulings_consumer_narrow_sweep.md`). Test-only is **not `dead`** — a quarry test
+  is a consumer by the definition above — and it is not a verdict: it is a **prompt to classify**. Each
+  test-only name resolves to `dead` (no market capability lost, evidenced) or
+  `deferred→<named ng consumer/slice>` (a real capability, forward-linked on that row). A `deferred→`
+  with no nameable consumer collapses to `dead` or `needed-now`. *(The sweep that forced this found
+  test-only to be the single most common omission class, not an edge case — §4 defined `dead` and
+  `deferred→X` and was silent on the majority case.)*
+- **The evidence protocol guards false POSITIVES as well as false negatives.** The bare-name grep above
+  catches too-narrow searches; on a **common name it over-reports instead**, because sibling modules
+  define the same name. A bare-name hit is **not a consumer until it resolves to the candidate module**
+  (`from <dotted> import n`, `<mod>.n`, `getattr(<mod>, "n")`). The instrument is an **AST importer
+  graph**, not grep: it sees multi-line parenthesised imports and attributes each name to the module it
+  actually comes from. *(Precedent: the consumer-narrow sweep measured `cs01` at 155 quarry hits,
+  `roll_pnl` at 32 — every one of them another module's own definition; all resolved to zero against the
+  candidate. Ungarded, ~5 modules would have been recorded RESIDENT on borrowed evidence.)*
+- **Net the candidate pool against the deletable set before counting** (same ruling). A park is a
+  tracker state, not a `git mv` (above), so **every ticked module is still physically on disk** and any
+  tree-walking sweep re-discovers it. Asserting the netting is the §6 floor rule applied to a sweep's
+  own population: reconcile the deletable list to the tracker's stated count *before* classifying.
+  *(Precedent: the consumer-narrow sweep reported 6 TICK-now and 4 PARTIAL-cheap; 4 of those 10 were
+  already deletable — netting gave the honest 3 and 3.)*
 - **Forward-link every `deferred→X`.** The obligation is written on **X's row** in
   `quarry_reconciliation.md` ("on crossing: add …"), not only on the retired module's entry — the
   retired entry is never re-read; X's row is read the moment X is picked up.

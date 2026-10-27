@@ -11,6 +11,53 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.130.0] - 2026-10-27
+
+### Changed
+- **Three `CLAUDE.md` §4 clauses, ruled out of the consumer-narrow sweep**
+  (`docs/handoffs/rulings_consumer_narrow_sweep.md`):
+  - **A test-only omission never blocks a tick, and is never silently shed.** Test-only is **not
+    `dead`** — a quarry test is a consumer by §4's own definition — and it is not a verdict but a
+    **prompt to classify**: each name resolves to `dead` (evidenced) or `deferred→<named consumer /
+    slice>`. A `deferred→` with no nameable consumer collapses to `dead` or `needed-now`. §4 defined
+    `dead` and `deferred→X` and was silent on what the sweep showed to be the **majority** case.
+  - **The evidence protocol guards false POSITIVES as well as false negatives.** The bare-name grep
+    catches too-narrow searches; on a *common* name it over-reports instead, because sibling modules
+    define the same name. A hit is not a consumer until it **resolves to the candidate module**. The
+    instrument is an **AST importer graph**, not grep. Measured: `cs01` 155 quarry hits, `roll_pnl`
+    32 — every one another module's own definition, all resolving to zero against the candidate.
+  - **Net the candidate pool against the deletable set before counting.** A park is a tracker state,
+    not a `git mv`, so every ticked module is still physically on disk and a tree-walking sweep
+    re-discovers it. This is §6's floor rule applied to a sweep's own population.
+
+### Migration
+- **Consumer-narrow sweep corrected — the yield is 3, not 6** (`RETIRE_consumer_narrow_sweep.md`
+  Part 2; Part 1 left as written, since a sweep record states what it found when it found it).
+  Cowork's spot-check caught 3 of the 6 proposed TICK-now as **already deletable**; netting against
+  the reconciled deletable set found **a fourth that the spot-check missed** —
+  **`options/sabr.py`** (T1 slice-22), which was filed PARTIAL-cheap, so the partial backlog is
+  **3, not 4**. `curves/bootstrap.py` was likewise already deletable, not RESIDENT.
+  **Cause:** Part 1 netted against a hardcoded 7-module list scraped with a narrow regex and never
+  asserted it was the real deletable set — the **floor rule violated by the sweep meant to apply
+  it**. The population now reconciles exactly to the tracker's 26 / 793.
+  **The decision is unchanged:** 3 ticks + 3 partials is a real backlog ⇒ **(b) continues, equity
+  waits.**
+- **Test-only re-classification for the 3 net-new modules** (proposals — no tick applied, tracker
+  unchanged until ruled):
+  - `options/vol_surface.py` → **TICK** proposed. `VolTermStructure` is **superseded, not shed** —
+    ng's `Surface` *is* a term structure (total variance linear in `T`); Part 1 had mis-filed it.
+    Arbitrage checks → `deferred→` the arb-free-SABR slice, whose row already names a live consumer.
+    `VolSurfaceArbitrageResult` → `dead` (0 source, 0 test refs).
+  - `options/swaption.py` → **TICK** proposed. The SABR-HW blender is **`dead` on a stronger ground
+    than "unconsumed"**: it needs HW to quote a Black vol, and `HullWhite.swaption_vol` was deleted
+    in v0.129.0 precisely because reconstructing an underlying for it was wrong by 381bp. Porting it
+    would re-introduce the defect just made unwritable — and its `deferred→SABR slice` link is
+    confirmed stale. `pv_ctx` superseded architecturally (the engine has no `ctx`).
+  - `credit/cds_market.py` → **TICK** proposed. Upfront↔spread family → `deferred→` the ng
+    credit-desk / CDS quote-conversion slice (a real ISDA capability, sharing a trigger with
+    `NG-DEFER-CREDITISDA`). `reprice_spreads`/`mark_to_market` superseded; `LadderRung` `dead`.
+- **Proposed drawdown 26 → 29 / 793** if the three ticks are ruled.
+
 ## [0.129.0] - 2026-10-27
 
 ### Changed
