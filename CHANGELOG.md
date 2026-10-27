@@ -11,6 +11,66 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.125.0] - 2026-10-27
+
+**Hull-White 1F — the first dynamics model, static and calibrated.** Spec:
+`docs/handoffs/spec_hull_white_slice.md` (Cowork, thread 0036; the MC slice was blocked on ng having
+no simulatable dynamics). **482 tests** (was 467). Drawdown unchanged at 26 / 793.
+
+### Added — `models/hull_white.py` (L3)
+`dr = (θ(t) − a·r)dt + σ dW` with **θ(t) pinned by the discount curve**, so HW reprices that curve by
+*construction* — the term-structure oracle is an exact 1e-12 identity at every pillar and every
+(a, σ), not a fit quality. Closed forms: `B(t,T)`, `ln A(t,T)`, the discount bond, the zero-bond
+option, and the **European swaption by Jamshidian** (one zero-bond option per coupon flow, struck at
+the `r*` where the coupon bond is worth par — an option on a sum becomes a sum of options, exactly).
+
+**Simulation is deliberately absent** (§6b): its first consumer is the MC-exposure slice, so it
+arrives with MC. A calibrated closed-form HW is complete and oracle-able on its own.
+
+### Oracles — 15, all rung-1 closed form
+Exact curve reprice · `B` identities and its **Ho-Lee convergence rate** (`a→0 ⇒ B→T−t` is a *limit*,
+error `O(a·dt²)`, so the oracle asserts the rate — a fixed tolerance would either pass vacuously or
+fail on correct maths) · numerical stability below the series threshold · zero-bond **call/put
+parity** · swaption **payer/receiver parity against the linear atoms** (model-independent, so it
+checks Jamshidian against something other than itself) · σ→0 → intrinsic · and the §3d cross-model
+identity: the engine reproduces HW's own Jamshidian price at HW's implied vol to 1e-9.
+
+### STOP, measured and guarded — ML-D1 again at 381bp
+**A short-rate model cannot satisfy `SwaptionVol` as keyed.** `swaption_vol(index, expiry,
+swap_tenor, strike, forward)` gives surface coordinates; Jamshidian needs the underlying's whole
+**coupon flow set** — frequency, day counts, schedule — none of which the key carries. Measured on a
+2Y5Y at 3%:
+
+| underlying | disagreement (HW's own price vs the engine at HW's vol) |
+|---|---|
+| annual (what the reconstruction guesses) | **0.0 bp** |
+| semi-annual (the actual contract) | **381 bp relative** |
+
+ML-D1 again, an order of magnitude past slice A's 48.8bp forward gap. The first draft's docstring
+claimed "the guess cancels"; the semi-annual oracle in the same slice disproved it, and the claim was
+mine — recorded rather than quietly fixed.
+
+**Guarded, not shipped broken.** Slice A's threaded forward is what makes the defect *detectable*:
+the engine passes the contract's true `S`, HW computes the `S` of its reconstruction, and refuses
+beyond 0.1bp — the `PricingFailure` carrying the measured gap. The unsound case is a failure value,
+never a wrong vol. Options and a recommendation (a second `SwaptionPrice` capability, so HW receives
+the contract and the wrong call becomes *unwritable*) are in
+`docs/handoffs/AUDIT_hull_white_capability.md`, for ruling. MC is unaffected — it consumes HW's
+dynamics, not this wiring.
+
+### Changed — `CurveHandle` declares its time measure
+A model that *fits* against a curve (HW's θ, any integral over it) needs the curve's own `date → t`
+map; reaching for it with `getattr` is the inspect-the-object pattern §1 forbids. Now on the
+capability, symmetric with `SurvivalHandle.time_basis` (added for the same reason last slice).
+
+### Retired: none — partial cross
+`models/hull_white.py` (299 lines): ng supersedes the **analytics** (A/B, the bond, the swaption, now
+by closed form where the quarry used a tree) and not the **numerics** — `_evolve_state_prices`,
+`tree_zcb`, `build_tree_alphas`, `tree_european_swaption` are the trinomial tree, which is the bulk of
+the module and whose consumers (American/Bermudan exercise, path dependence) are its own slice.
+
+`TEST_FLOOR` 467 → 482.
+
 ## [0.124.0] - 2026-10-26
 
 **XVA slice 2 — netting, and it was the test of slice 1's split.** Spec:
