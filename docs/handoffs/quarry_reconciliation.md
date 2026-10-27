@@ -478,6 +478,26 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   `deferred→` the generic-process (mc_*) framework slice; `ExposureResult` → `dead` (shed).
   The quarry also bundles CVA/DVA/FVA *inside* the engine; ng deliberately splits profile from atom
   (the `cva`-signature gate), so that bundling is shed rather than residual.
+
+- **`SwaptionPrice` capability retire read (0 TICKS — PARTIAL, as expected; 26 / 793 unchanged):**
+  re-read `quarry/pricebook/models/hull_white.py` (299 lines) end-to-end against ng after the
+  capability change. **The verdict is unchanged from the Hull-White slice entry above, and this
+  slice does not move it** — the change is to the *protocol the engine dispatches on*, not to the
+  quarry surface ng covers. Re-stated with the consumer evidence the §4 consumed-surface rule wants:
+  **superseded** `B`, `_log_A`, `_forward_rate`, `zcb_price`, construction; **residual**
+  `build_tree_alphas` + `tree_european_swaption` (+ their private `_evolve_state_prices`), the
+  trinomial tree.
+  **The residual is consumer-backed, not feature-diffed** — grep over `quarry/pricebook` (glob
+  quoted; the unquoted form silently returned 0 and was discarded) finds **3 live quarry-source
+  consumers** of the tree pair: `options/bermudan_swaption.py`, `desks/callable_bond_desk.py`, and
+  the callable-floater / bermudan-capfloor pair, plus 18 + 3 test references. American exercise is
+  what wants a lattice, so this is `deferred→` **the lattice slice**, where the obligation is
+  forward-linked.
+  **Note ng is AHEAD on the analytics it does cover:** ng prices the European swaption by
+  **Jamshidian closed form** and exposes `zero_bond_option`; the quarry has neither — it reaches
+  European swaptions only through the tree. So the partial cross is not "ng is behind", it is "ng
+  has the analytics and not the numerics". Evidence: `AUDIT_hull_white_capability.md` +
+  `tests/L3/test_swaption_price_capability.py` + `CHANGELOG` v0.129.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -518,6 +538,14 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `desks/equity_vol_desk.py`, `fx/fx_vol_surface.py`.
   - **the HW / per-currency-models topic** — **on crossing:** `options/synthetic_swaption_data.py`
     retires with `models/hw_per_currency.py`, its one live consumer (`synthetic_hw_targets`).
+  - **the LATTICE slice (HW trinomial tree)** — **on crossing:** `models/hull_white.py` ticks only
+    once `build_tree_alphas` + `tree_european_swaption` (+ private `_evolve_state_prices`) are
+    superseded. These are the module's whole residual; the analytics already crossed, and ng is
+    *ahead* there (Jamshidian closed form + `zero_bond_option`, neither of which the quarry has).
+    Live quarry consumers to satisfy: `options/bermudan_swaption.py`,
+    `desks/callable_bond_desk.py`, and the callable-floater / bermudan-capfloor pair. Carried from
+    the Hull-White slice (v0.125.0) and re-confirmed by consumer grep at the `SwaptionPrice`
+    capability slice (v0.129.0).
 
 The six Topic-1 deletables are now **physically parked** (git-mv'd at the T1 close, one event, doc 18 §9).
 Full retire evidence + resident inventory (file:line) + forward-links are in the Topic-1 MANIFEST retire

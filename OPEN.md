@@ -36,6 +36,14 @@ but not a *tier* emptying while another grows (L0 losing 20 tests while L4 gains
 **Re-open trigger:** the first tier rebalance, or a slice that moves tests between layers — at which
 point the floor becomes a per-tier mapping.
 
+**NG-WATCH-CLOCK — test wall-clock is ungated.** `TEST_FLOOR` holds the test *count*; nothing holds
+the *time*. The MC exposure profile's first draft ran 73s for one file (per-path `bond()` calls)
+before vectorisation took it to 0.45s — caught by eye, not by a gate. One instance, so §6's
+convention is **watch, not gate**: a wall-clock ceiling built on a single case would be a number
+guessed from one sample. **Re-open trigger:** a second slice where test wall-clock balloons — at
+which point propose a CI wall-clock ceiling, the floor-rule analogue (a gate's green is evidence
+only if it asserts a bound on what it examined). *(Ruled by Cowork, `rulings_CP_xva_mc.md` §4.)*
+
 ## Credit (B6) — named deferrals (2026-10-26, slices 1-2)
 
 **NG-DEFER-CREDITISDA — the credit oracle has no ISDA cross-check.** Ratified by Cowork (thread 0023):
