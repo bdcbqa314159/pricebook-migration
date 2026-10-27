@@ -125,3 +125,112 @@ this sweep shows test-only is the single most common omission class, not an edge
   §3 rather than §4, and I did not establish which. If the backlog above is accepted it does not
   change the decision, so I did not spend the pass on it.
 - **Did not re-derive the drawdown.** Stays 26 / 793 until ticks are ruled.
+
+---
+
+# Part 2 — corrected counts and the test-only re-classification
+
+**Date:** 2026-10-27 · **Answers:** `rulings_consumer_narrow_sweep.md` (thread 0048). Part 1 above is
+left **as written** — a sweep record states what it found when it found it; the corrections are here.
+
+## 7. The count was wrong, and one error survived Cowork's spot-check
+
+Cowork caught that **3 of the 6 TICK-now were already deletable** (`credit/credit_risk` slice 3,
+`options/implied_vol` slice 24, `options/capfloor` slice 23). Confirmed — all three are ticked rows in
+this tracker. The cause is mine and it is embarrassing in a specific way: Part 1 netted the candidate
+pool against **a hardcoded 7-module list I had scraped with a narrow regex**, and never asserted that
+the list was the real deletable set. That is **the §6 floor rule, violated by the sweep that was
+supposed to apply it** — a filter with no floor on what it filtered.
+
+Netting properly against the reconciled set finds **one more that the spot-check did not**:
+
+| module | Part 1 said | actually | source |
+|---|---|---|---|
+| `credit/credit_risk.py` | TICK-now | **already deletable** | slice 3, 25 → 26 |
+| `options/implied_vol.py` | TICK-now | **already deletable** | T1 slice-24, 21 → 22 |
+| `options/capfloor.py` | TICK-now | **already deletable** | T1 slice-23, 20 → 21 |
+| **`options/sabr.py`** | **PARTIAL-cheap** | **already deletable** | **T1 slice-22, 19 → 20 — missed by both of us** |
+| `curves/bootstrap.py` | RESIDENT (under-verified) | **already deletable** | T1 slice-3 |
+
+`options/sabr.py` matters because it changes Cowork's figure too: the partial backlog is **3, not 4**.
+
+**The population reconciles exactly**, which is the check Part 1 skipped:
+Topic-0 (13) + Topic-1 (6) = 19 → `options/sabr` 20 → `options/capfloor` 21 → `options/implied_vol` 22
+→ `options/swaption_vol_cube` 23 → `options/swaption_vol` + `options/swaption_conventions` 25 →
+`credit/credit_risk` **26**. Matches the tracker's stated 26 / 793.
+
+### Corrected headline
+
+| verdict | Part 1 | **corrected** | modules |
+|---|---|---|---|
+| net-new TICK-now | 6 | **3** | `options/vol_surface` · `options/swaption` · `credit/cds_market` |
+| net-new PARTIAL-cheap | 4 | **3** | `fixed_income/swap` · `credit/cds` · `fixed_income/floating_leg` |
+
+**The decision does not change** — 3 ticks plus 3 partials is still a real backlog, so **(b) continues
+and equity waits.** But the yield is 3, not 6, and the honest number is the one that goes in the record.
+
+## 8. Test-only re-classification under the new clause
+
+Every test-only omission below resolves to `dead` (evidenced) or `deferred→<named>`.
+
+### `options/vol_surface.py` — proposed **TICK**
+
+| omission | class | evidence |
+|---|---|---|
+| `VolTermStructure` | **superseded** — not shed at all | ng's `Surface` **is a term structure**: `vols[i]` at `expiries[i]`, interpolating total variance `w = σ²T` linear in `T`. Part 1 mis-filed this as a test-only omission; re-reading ng corrected it |
+| `check_calendar_arbitrage`, `check_butterfly_arbitrage`, `validate_vol_surface` | **`deferred→` the arb-free-SABR slice** | a real capability ng lacks entirely. The target row already exists in this tracker with a **live** consumer (`options/vol_arbitrage_scanner.py`), so the forward-link has a named home rather than a vague "later" |
+| `VolSurfaceArbitrageResult` | **`dead`** | 0 references in `quarry/pricebook` **and** 0 in `quarry/tests` — the only true `dead` in this batch |
+
+Consumed surface: `FlatVol` (6 live importers; methods `vol`, `bumped`) → ng `Surface` + `flat_surface`
++ `Surface.bumped` + `risk/bump.SurfaceBump`.
+
+### `options/swaption.py` — proposed **TICK**
+
+| omission | class | evidence |
+|---|---|---|
+| `price_swaption_sabr_hw` (the SABR-HW blender) | **`dead`** — and on a stronger ground than "unconsumed" | see below |
+| `pv_ctx` | **superseded** architecturally | ng's engine is `price(instrument, model)` and reaches market through `model.market` (§2). There is no `ctx` to pass; 0 importers of *this* module call it |
+| `_swaption_from_convention` | **`deferred→` conventions** | same per-currency-convention deferral already forward-linked from the ZCB/bond/OIS/FRA retires; 0 callers here |
+
+**On the blender, I go further than Cowork's "lean dead".** It computes
+`vol = w·sabr_vol + (1−w)·hw_vol` with `w = exp(−T/blend_half_life)` and `blend_half_life = 5.0` — an
+ad-hoc weighting with a guessed default and **no citation in the docstring**, so it could not pass the
+§4 green-oracle gate as written. More decisively: **ng cannot express it without undoing v0.129.0.**
+Its `hw_vol` input requires HW to quote a Black vol, and `HullWhite.swaption_vol` was deleted this
+slice precisely because reconstructing an underlying to produce that vol was wrong by 381bp. Porting
+the blender would mean re-introducing the defect we just made unwritable. That is `dead` by design,
+not merely by consumer count — and Cowork's note that the old `deferred→SABR slice` link is **stale**
+is confirmed: the SABR slice crossed without it.
+
+Consumed surface: `Swaption`, `SwaptionType` (3 desks; methods `price`, `greeks`, `annuity`,
+`forward_swap_rate`) → ng `Swaption` + `OptionType` + `price_swaption` + `rpv01`/`forward` +
+`risk/greeks`.
+
+### `credit/cds_market.py` — proposed **TICK**
+
+| omission | class | evidence |
+|---|---|---|
+| `spread_to_upfront`, `upfront_to_spread`, `bootstrap_from_upfronts` | **`deferred→` the ng credit-desk / CDS quote-conversion slice** | agreed with Cowork: a **real** ISDA-standard capability, not dead. ng has no upfront leg at all. Related to `NG-DEFER-CREDITISDA`, which already waits on a citable ISDA worked example — so the quote-conversion slice and that ledger item share a trigger |
+| `pricing_ladder`, `roll_pnl` | **`deferred→` the same credit-desk slice** | desk analytics (a bump-ladder of marks; roll P&L). ng has `cs01`/`bucketed_cs01` for sensitivities and `shell/benefit` for realized cash, but not these two shapes |
+| `reprice_spreads` | **superseded** | reprices par spreads off a bootstrapped survival curve — this is exactly ng's credit-bootstrap round-trip oracle (`calibration/credit.py` + its reprice-to-quote test) |
+| `mark_to_market` | **superseded** | ng `engine/credit.price_cds` + `shell/portfolio.mark` |
+| `LadderRung` | **`dead`** | 0 references in source and 0 in tests |
+
+Consumed surface: `build_cds_curve` (3 live importers) → ng `calibration/credit.bootstrap_survival_curve`.
+
+## 9. The three §4 clauses, landed
+
+Per the ruling, added to `CLAUDE.md` §4 in this slice:
+1. **test-only never blocks a tick, and is never silently shed** — it is a prompt to classify as
+   `dead` or `deferred→<named>`.
+2. **the evidence protocol guards false positives too** — a bare-name hit is not a consumer until it
+   resolves to the candidate; the instrument is an AST importer graph, not grep.
+3. **net the candidate pool against the deletable set before counting** — a park is a tracker state,
+   so every ticked module is still on disk and a tree-walking sweep re-finds it.
+
+Clause 3 exists because this sweep needed it. Clause 2 exists because this sweep found it.
+
+## 10. Proposed drawdown, if the three ticks are ruled
+
+**26 → 29 / 793.** No tick is applied in this slice; the rows are proposals and the tracker is
+unchanged until Cowork rules.
