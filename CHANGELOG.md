@@ -11,6 +11,63 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.126.0] - 2026-10-27
+
+**MC exposure — ng's first simulation, anchored to the closed form.** Spec:
+`docs/handoffs/spec_mc_exposure_slice.md` (Cowork, thread 0038). **494 tests** (was 482). Drawdown
+unchanged at 26 / 793 — the bar moves at MC slice 2 (netting), as the spec said.
+
+### Added — exact sampling, so MC's only error is statistical
+Under the `tᵢ`-forward measure HW's short rate is **exactly** Gaussian:
+`r(tᵢ) ~ N( f(0,tᵢ), σ²(1 − e^{−2a·tᵢ})/(2a) )`. The mean being the *instantaneous forward* is an
+identity, not an approximation — the `α(t)` shift that fits the curve and the forward-measure drift
+cancel because `(1 − e^{−aT}) − (1 − e^{−2aT})/2 ≡ (1 − e^{−aT})²/2` (verified to 1e-17). So exposure
+dates are sampled **directly**: no time stepping, no Euler bias, and therefore the oracle can be
+*agreement with the closed form* rather than mere convergence.
+
+Dropping the drift adjustment is the classic error here and would bias every exposure by
+`σ²B(0,t)²/2`; a test checks the sampled mean and variance against `f(0,t)` **directly on the
+sampler**, not inferred from a price.
+
+### The agreement numbers
+Against HW's own Jamshidian price (the right anchor — MC simulates HW, so comparing to the Black cube
+would be comparing two models), 5Y annual swap at 3%, 200k paths:
+
+| exposure date | MC | exact | relative |
+|---|---|---|---|
+| 2027-01-15 | 139,032.62 | 139,616.05 | 41.8 bp |
+| 2028-01-15 | 144,095.42 | 143,149.79 | 66.1 bp |
+| 2029-01-15 | 113,532.84 | 114,129.97 | 52.3 bp |
+| 2030-01-15 | 64,431.47 | 64,638.58 | 32.0 bp |
+| **CVA** | **5,350.25** | **5,355.32** | **9.5 bp** |
+
+Convergence, fixed seed: 268 bp at 2k paths → 130 → 71 → 24 → **12 bp at 512k**, i.e. ~2× per 4× of
+paths. The oracle asserts that **rate**, not a tolerance — a fixed tolerance at one path count cannot
+distinguish a converging sampler from a biased-but-noisy one.
+
+### Added — the `monte_carlo` numerical family
+`MonteCarloConfig(paths, seed)`, **neither defaulted**. The seed is the sharper of the two: without it
+a run cannot be repeated, so a defaulted seed breaches invariant 1 (identical inputs ⇒ identical
+output) and not merely invariant 5. **No time grid** — the transition is exact, so a grid would be a
+knob that cannot change the answer; a model whose transition is *not* exact brings one with it (§6b).
+This is the second of §3b's four families to land, beside `IntegrationConfig`; `lattice` and `solver`
+still have no consumer.
+
+### `cva` still untouched
+The profile stays `(date, EE)`, so MC changed the exposure method and nothing else — the same result
+netting produced, and the signature gate from slice 2 still holds. **Marginals, deliberately:** each
+date is drawn under its own forward measure, which is sufficient for `EE(tᵢ)` and for path-wise
+netting across *trades at one date*; wrong-way risk conditions on the default time and needs joint
+paths, so those arrive with WWR — named, not assumed.
+
+### Performance — 73s → 0.45s
+The first implementation called `HullWhite.bond` once per path per flow (200k × 6 Python calls),
+taking ~73s for this file alone. `P(t,T;r) = exp(logA − B·r)` and neither `logA` nor `B` depends on
+`r`, so each maturity's curve-dependent part is now computed **once** and the path dimension stays in
+numpy — same formula, two call shapes (§3d). Full suite back to 1.16s.
+
+`TEST_FLOOR` 482 → 494.
+
 ## [0.125.0] - 2026-10-27
 
 **Hull-White 1F — the first dynamics model, static and calibrated.** Spec:

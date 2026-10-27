@@ -450,6 +450,15 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   quarry module. Evidence: `spec_hull_white_slice.md` + `AUDIT_hull_white_capability.md` +
   `CHANGELOG` v0.125.0.
 
+- **MC slice-1 retire read (0 TICKS — as the spec expected; 26 / 793 unchanged):**
+  `quarry/pricebook/models/mc_exposure.py` (163 lines) is **not crossed here.** ng's MC exposure is
+  single-trade and **exactly sampled** (HW's forward-measure Gaussian, no time stepping); the
+  quarry's is a path-stepping engine whose consumed surface is netting + the `mc_*` framework. Per
+  the spec, **MC slice 2** (path-wise netting + the heterogeneous set) is where `mc_exposure.py` and
+  the MC-driven part of `risk/xva.py` cross and **the bar moves** — forward-linked on their rows.
+  `risk/xva.py`'s residual is unchanged at 12 of 13 functions.
+  Evidence: `spec_mc_exposure_slice.md` + `CHANGELOG` v0.126.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's

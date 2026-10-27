@@ -23,12 +23,18 @@ Provenance:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from datetime import date
 
+import numpy as np
+
 from pricebook.engine.registry import dispatch as price
+from pricebook.foundation.day_count import Accrual
+from pricebook.foundation.numerics import MonteCarloConfig
 from pricebook.foundation.results import PricingFailure
 from pricebook.foundation.schedule import future_periods
+from pricebook.models.hull_white import HullWhite
 from pricebook.models.protocols import CalibratedModel
 from pricebook.products.option import OptionType, Swaption
 from pricebook.products.swap import FixedLeg, FloatLeg, VanillaSwap
@@ -152,3 +158,96 @@ def _net_swap(swaps: list[VanillaSwap]) -> VanillaSwap | PricingFailure:
         FixedLeg(first.fixed_leg.schedule, first.fixed_leg.day_count, rate),
         FloatLeg(first.float_leg.schedule, first.float_leg.day_count, first.float_leg.index),
     )
+
+
+def mc_exposure_profile(
+    swap: VanillaSwap, model: HullWhite, numerics: MonteCarloConfig
+) -> ExposureProfile | PricingFailure:
+    """`EE(tᵢ)` by Monte-Carlo under Hull-White — ng's first simulation.
+
+    **Exact sampling, so MC's only error is statistical.** Under the `tᵢ`-forward measure HW's short
+    rate is exactly Gaussian,
+
+        r(tᵢ) ~ N( f(0,tᵢ),  σ²(1 − e^{−2a·tᵢ}) / (2a) )
+
+    and the mean being the *instantaneous forward* is an identity, not an approximation: the `α(t)`
+    shift that fits the curve and the forward-measure drift adjustment cancel, because
+    `(1 − e^{−aT}) − (1 − e^{−2aT})/2 ≡ (1 − e^{−aT})²/2`. So the dates are sampled **directly** —
+    no time stepping, no Euler bias — which is what lets the oracle be *agreement with the closed
+    form* rather than mere convergence. Dropping the drift adjustment is the classic error here and
+    would bias every exposure by `σ²B(0,t)²/2`; a test checks the sampled mean against `f(0,t)`
+    directly, not through a price.
+
+    **Marginals, deliberately.** Each date is drawn under its own forward measure, so draws are
+    consistent per date but are not one joint path set. `EE(tᵢ)` needs only the marginal, and so does
+    path-wise netting across *trades at one date*. **Wrong-way risk does not** — it conditions on the
+    default time — so joint paths arrive with WWR, named rather than assumed.
+
+    **The exposure composes HW's own bond.** The swap's value at `tᵢ` is
+    `(1 − P(tᵢ,tₙ)) − Σ K·τⱼ·P(tᵢ,tⱼ)` — the same coupon bond HW's Jamshidian decomposes, so MC and
+    the closed form share the atom rather than agreeing by coincidence (§3d).
+
+    **Output is `(date, EE)`**, unchanged — so `cva` is untouched by MC exactly as it was by netting."""
+    periods = swap.fixed_leg.schedule.periods
+    if not periods:
+        return ()
+    sign = 1.0 if swap.notional >= 0.0 else -1.0
+    try:
+        out: list[tuple[date, float]] = []
+        for p in periods:
+            expiry = p.accrual_end
+            t_exp = model.market.curves.discount(model.currency).time_measure.year_fraction(expiry)
+            flows = _remaining_fixed_flows(swap, expiry, model)
+            if not flows:
+                out.append((expiry, 0.0))
+                continue
+            draws = _simulate_short_rate(model, t_exp, numerics)
+            t_last = flows[-1][0]
+            # `P(t,T;r) = exp(logA − B·r)` and neither logA nor B depends on r, so each maturity's
+            # curve-dependent part is computed ONCE and the path dimension is pure numpy. The naive
+            # per-path loop called `bond` 200k × (n+1) times and took ~70s for this file alone.
+            fixed_leg = np.zeros_like(draws)
+            for t_j, c in flows:
+                fixed_leg += c * _bond_vec(model, t_exp, t_j, draws)
+            value = sign * (1.0 - _bond_vec(model, t_exp, t_last, draws) - fixed_leg)
+            discounted = model.bond(0.0, t_exp, model.r0) * float(np.mean(np.maximum(value, 0.0)))
+            out.append((expiry, abs(swap.notional) * discounted))
+    except (ValueError, KeyError, ZeroDivisionError) as exc:
+        return PricingFailure(f"MC exposure: {exc}")
+    return tuple(out)
+
+
+def _remaining_fixed_flows(
+    swap: VanillaSwap, expiry: date, model: HullWhite
+) -> list[tuple[float, float]]:
+    """The fixed leg's `(tⱼ, K·τⱼ)` still outstanding at `expiry`, each `τ` from the leg's own
+    convention — so a semi-annual or odd-day-count underlying values correctly."""
+    measure = model.market.curves.discount(model.currency).time_measure
+    flows: list[tuple[float, float]] = []
+    for p in swap.fixed_leg.schedule.periods:
+        if p.payment_date <= expiry:
+            continue
+        tau = Accrual(p.accrual_start, p.accrual_end, swap.fixed_leg.day_count).year_fraction()
+        flows.append((measure.year_fraction(p.payment_date), swap.fixed_leg.rate * tau))
+    return flows
+
+
+def _simulate_short_rate(model: HullWhite, t: float, numerics: MonteCarloConfig):
+    """`r(t)` under the `t`-forward measure: Gaussian, mean `f(0,t)`, variance
+    `σ²(1 − e^{−2at})/(2a)`. Exact — see `mc_exposure_profile` for why the mean is the forward.
+
+    Seeded per call *and per date* from the config's seed, so the profile is reproducible
+    byte-identically (invariant 1) while different dates do not share draws."""
+    mean = model._instantaneous_forward(t)
+    if model.sigma == 0.0 or t <= 0.0:
+        return np.full(numerics.paths, mean)
+    var = model.sigma**2 * (1.0 - math.exp(-2.0 * model.a * t)) / (2.0 * model.a)
+    rng = np.random.default_rng((numerics.seed, round(t * 1_000_000)))
+    return rng.normal(mean, math.sqrt(var), numerics.paths)
+
+
+def _bond_vec(model: HullWhite, t: float, maturity: float, r):
+    """`P(t,T; r)` over an array of `r`. The same closed form `HullWhite.bond` evaluates for one
+    rate — `logA` and `B` are curve-and-parameter facts, independent of `r`, so they are computed
+    once per maturity and the path dimension stays in numpy (§3d: one formula, two call shapes)."""
+    return np.exp(model._log_a(t, maturity) - model.b(t, maturity) * r)
