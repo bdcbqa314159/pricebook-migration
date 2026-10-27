@@ -11,6 +11,62 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.129.0] - 2026-10-27
+
+### Changed
+- **`SwaptionPrice` — Hull-White prices the contract it is given, and the 381bp becomes unwritable.**
+  `models/protocols.py` gains `SwaptionPrice.swaption_price(swap, expiry, kind)`, a sibling of
+  `SwaptionVol` rather than a variant of it. `SwaptionVol`'s key is `(index, expiry, swap_tenor,
+  strike)` — exactly right for a model that reads a surface, and structurally insufficient for one
+  that prices a contract: Jamshidian needs the underlying's whole coupon flow set, which the key
+  cannot carry. Forced through it, `HullWhite` had to *reconstruct* an underlying, and the
+  reconstruction was wrong by **381bp relative** on a semi-annual swap
+  (`docs/handoffs/AUDIT_hull_white_capability.md`, now **closed**). The capability takes the real
+  swap, so there is nothing left to guess.
+- **`HullWhite` now satisfies `SwaptionPrice` and NOT `SwaptionVol`.** `swaption_vol`,
+  `_pending_swap` and `_S_IDENTITY_TOL` are **deleted** — the reconstruction, the threaded-forward
+  guard that detected it, and the Black-vol inversion all leave together. A guard is only needed
+  while the defect is writable.
+- **The engine prefers the price capability, falling back to vol + law**, by protocol membership —
+  no `isinstance` on a concrete model. `test_pricer_has_no_law_switch` allowlists `SwaptionPrice`
+  as a capability, so §1's no-concrete-type-ladder law still binds the dispatch.
+
+### Oracles
+- `test_the_SEMI_ANNUAL_underlying_that_cost_381bp_now_prices_EXACTLY` — **the inversion of the
+  slice's STOP.** This test previously asserted a *refusal*; it now asserts the engine agrees with
+  HW's own closed form to **1e-9** on the very contract that used to fail. Rung 1 (closed form).
+- `tests/L3/test_swaption_price_capability.py` — the 381bp case exact, the reconstruction machinery
+  **absent** (asserted structurally, not by grepping for the word — the module still explains why it
+  was removed), HW satisfies `SwaptionPrice` and not `SwaptionVol`, the engine source names neither
+  concrete model, and payer/receiver parity holds through the engine.
+- **Black/SABR byte-identical** across all 32 captured price points (annual/semi-annual ×
+  4 strikes × call/put × 2 models). The fallback path is untouched, not merely "still passing".
+
+### Fixed
+- **`SwaptionVol` had silently lost `@runtime_checkable`.** Inserting the new protocol between the
+  decorator and `class SwaptionVol` stole it. The runtime probe was *misleading* —
+  `getattr(SwaptionVol, "_is_runtime_protocol")` still returned `True` because the flag is
+  **inherited** from `CalibratedModel` — while pyright correctly flagged the `isinstance`. Caught by
+  the pinned static gate, not by the suite; the first dispatch against a non-runtime protocol raises
+  `TypeError`, so this was a production fault, not a type-checker nit.
+
+### Debt
+- **`NG-WATCH-CLOCK`** (`OPEN.md`) — test wall-clock is ungated. `TEST_FLOOR` holds the *count*,
+  nothing holds the *time*; the MC exposure draft ran 73s before vectorisation took it to 0.45s, and
+  that was caught by eye. One instance ⇒ **watch, not gate** (a ceiling fitted to one sample is a
+  guessed number). Trigger: a second ballooning slice. Ruled by Cowork, `rulings_CP_xva_mc.md` §4.
+
+### Migration
+- **Retire read `quarry/pricebook/models/hull_white.py` — 0 ticks, PARTIAL, 26 / 793 unchanged**
+  (unchanged verdict; this slice changes the protocol, not the quarry surface ng covers). Residual
+  is the **trinomial tree** (`build_tree_alphas`, `tree_european_swaption`,
+  `_evolve_state_prices`), and it is **consumer-backed rather than feature-diffed**: 3 live
+  quarry-source consumers (`options/bermudan_swaption.py`, `desks/callable_bond_desk.py`, the
+  callable-floater / bermudan-capfloor pair). `deferred→` the lattice slice, forward-linked onto
+  that row. Note ng is *ahead* on what it does cover — Jamshidian closed form and
+  `zero_bond_option`, neither of which the quarry has.
+- `TEST_FLOOR` 510 → **518**.
+
 ## [0.128.0] - 2026-10-27
 
 **XVA / MC-exposure checkpoint (§6 hard stop at a capability-cluster boundary), and the
