@@ -251,3 +251,72 @@ def _bond_vec(model: HullWhite, t: float, maturity: float, r):
     rate — `logA` and `B` are curve-and-parameter facts, independent of `r`, so they are computed
     once per maturity and the path dimension stays in numpy (§3d: one formula, two call shapes)."""
     return np.exp(model._log_a(t, maturity) - model.b(t, maturity) * r)
+
+
+def mc_netted_exposure_profile(
+    swaps: Sequence[VanillaSwap], model: HullWhite, numerics: MonteCarloConfig
+) -> ExposureProfile | PricingFailure:
+    """`EE(tᵢ)` for a netting set by Monte-Carlo: **net inside each path, then floor at zero.**
+
+        EE(tᵢ) = P(0,tᵢ) · mean over paths of  max( Σ_trades PV_trade(tᵢ, r), 0 )
+
+    The max is **outside** the sum, which is the whole content of netting — offsetting trades cancel
+    before the floor rather than after, so `max(Σ MtM, 0) ≤ Σ max(MtM, 0)`. Summing per-trade
+    exposures instead would satisfy that inequality too and lose the benefit entirely; the
+    same-direction / offsetting pair of oracles is what distinguishes the two.
+
+    **MC has no net-to-one-swap constraint, and that is this builder's reason to exist.** The
+    analytic netted profile must aggregate the set into a single underlying, because the swaption
+    proxy prices one swap — so a multi-index or mixed-schedule set `PricingFailure`s there,
+    correctly. Here each trade is revalued on the *same* simulated `r(tᵢ)` using its **own** flows
+    and the MtMs are simply added, so heterogeneity costs nothing. Netting path-wise is strictly more
+    general than netting positions.
+
+    **No sampler change from slice 1.** Marginal-per-date draws suffice because netting is across
+    *trades at one date*. (Wrong-way risk conditions on the default time and does need joint paths —
+    a later slice, named rather than assumed.)
+
+    **Output stays `(date, EE)`**, so `cva` is untouched by a third exposure method; and it takes bare
+    positions, never a `Book` — the netting set is L6 and importing it here would be the upward import
+    the acyclic gate caught in the analytic netting slice."""
+    if not swaps:
+        return ()
+    measure = model.market.curves.discount(model.currency).time_measure
+    dates = sorted({p.accrual_end for s in swaps for p in s.fixed_leg.schedule.periods})
+    if not dates:
+        return ()
+    try:
+        out: list[tuple[date, float]] = []
+        for when in dates:
+            t_exp = measure.year_fraction(when)
+            legs = [(s, _remaining_fixed_flows(s, when, model)) for s in swaps]
+            if all(not flows for _, flows in legs):
+                out.append((when, 0.0))
+                continue
+            draws = _simulate_short_rate(model, t_exp, numerics)
+            total = np.zeros_like(draws)
+            for swap, flows in legs:
+                if not flows:
+                    continue  # this trade has run off; the others have not
+                total += _swap_mtm_vec(swap, flows, model, t_exp, draws)
+            netted = model.bond(0.0, t_exp, model.r0) * float(np.mean(np.maximum(total, 0.0)))
+            out.append((when, netted))
+    except (ValueError, KeyError, ZeroDivisionError) as exc:
+        return PricingFailure(f"MC netted exposure: {exc}")
+    return tuple(out)
+
+
+def _swap_mtm_vec(
+    swap: VanillaSwap, flows: list[tuple[float, float]], model: HullWhite, t_exp: float, r
+):
+    """A swap's mark at `t_exp` over an array of short rates, **signed by its notional**.
+
+    At an accrual boundary the float leg is worth par, so the fixed-payer's value per unit notional
+    is `(1 − P(t,tₙ)) − Σ K·τⱼ·P(t,tⱼ)` — the same coupon bond HW's Jamshidian decomposes, composed
+    rather than restated (§3d). The notional carries the sign, so a receiver is the payer's negative
+    and netting is plain addition."""
+    t_last = flows[-1][0]
+    fixed = np.zeros_like(r)
+    for t_j, c in flows:
+        fixed += c * _bond_vec(model, t_exp, t_j, r)
+    return swap.notional * (1.0 - _bond_vec(model, t_exp, t_last, r) - fixed)

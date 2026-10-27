@@ -32,7 +32,10 @@ from pricebook.models.protocols import CalibratedModel
 from pricebook.market.curve_set import CurveKey
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.products.swap import VanillaSwap
+from pricebook.foundation.numerics import MonteCarloConfig
+from pricebook.models.hull_white import HullWhite
 from pricebook.risk import Priceable, ir_delta, netted_exposure_profile, priceable
+from pricebook.risk.exposure import mc_netted_exposure_profile
 from pricebook.risk.xva import cva
 
 Product = object  # a registered L2 product; the engine dispatches by type, so the shell stays type-blind
@@ -163,4 +166,32 @@ def book_cva(
         recovery = model.market.recovery(entity)
     except (KeyError, ValueError) as exc:
         return PricingFailure(f"CVA: {exc}")
+    return cva(profile, survival, recovery)
+
+
+def book_mc_cva(
+    book: Book, model: HullWhite, entity: ReferenceEntity, numerics: MonteCarloConfig
+) -> float | PricingFailure:
+    """The unilateral CVA of a netting set by Monte-Carlo — the same shape as `book_cva`, with the MC
+    exposure builder in place of the analytic one.
+
+    Unlike `book_cva` this accepts a **heterogeneous** set: MC reprices any mix on paths, so a
+    multi-index or mixed-schedule book that the analytic proxy must refuse succeeds here. Only a
+    non-swap product is rejected, because `mc_netted_exposure_profile` values swaps."""
+    swaps: list[VanillaSwap] = []
+    for trade in book.trades:
+        for product in trade.products:
+            if not isinstance(product, VanillaSwap):
+                return PricingFailure(
+                    f"MC netted exposure values swaps; got {type(product).__name__}"
+                )
+            swaps.append(product)
+    profile = mc_netted_exposure_profile(swaps, model, numerics)
+    if isinstance(profile, PricingFailure):
+        return profile
+    try:
+        survival = model.market.curves.survival(entity)
+        recovery = model.market.recovery(entity)
+    except (KeyError, ValueError) as exc:
+        return PricingFailure(f"MC CVA: {exc}")
     return cva(profile, survival, recovery)
