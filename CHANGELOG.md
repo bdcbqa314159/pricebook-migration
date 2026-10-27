@@ -11,6 +11,60 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.127.0] - 2026-10-27
+
+**MC netting — and the heterogeneous set that analytic cannot price.** Spec:
+`docs/handoffs/spec_mc_slice2_netting.md` (Cowork, thread 0040). **510 tests** (was 494). Drawdown
+unchanged at 26 / 793 — **the tick was expected here and the evidence says no**; see below, it is the
+useful finding of the slice.
+
+### Added — netting inside the path dimension
+`mc_netted_exposure_profile(swaps, model, numerics)` (L5):
+`EE(tᵢ) = P(0,tᵢ)·mean( max( Σ_trades PV_trade(tᵢ, r), 0 ) )`. The max is **outside** the sum, which
+is the whole content of netting — offsetting trades cancel before the floor rather than after.
+`book_mc_cva` (L6 shell) delegates down; **`Book` is not imported into L5**, the §1 error the acyclic
+gate caught in the analytic netting slice.
+
+**No sampler change.** Marginal-per-date draws suffice because netting is across *trades at one
+date*. Wrong-way risk conditions on the default time and does need joint paths — a later slice.
+
+### The point of the slice: MC has no net-to-one-swap constraint
+The analytic netted profile must aggregate a set into a **single** underlying, because the swaption
+proxy prices one swap — so a multi-index or mixed-schedule set `PricingFailure`s there, correctly
+rather than mis-netting. MC revalues each trade on the *same* simulated `r(tᵢ)` with its **own**
+flows and adds, so heterogeneity costs nothing. Both facts are asserted **together**: the same set
+that fails analytically succeeds under MC, and the mixed-set CVA is oracled by convergence (no closed
+form exists for it) — the seed-to-seed scatter tightens by >2× for 16× the paths.
+
+### `cva` untouched for the third time
+MC netting is the third exposure method; `cva`'s signature has changed for none of them, and the gate
+asserting that now covers all three.
+
+### The netting identities, which a sum would also satisfy
+`max(Σ,0) ≤ Σ max(·,0)` holds for a sum-of-exposures implementation too, so the inequality alone
+proves nothing. The discriminating pair: same-direction trades show **no** benefit (within 1%) and
+offsetting ones a real one (>10%); a perfectly offsetting set is **exactly** zero on every path,
+because the cancellation happens inside the path rather than in the average.
+
+### Retired: none — and the reason is the planning finding
+`models/mc_exposure.py`: ng supersedes the exposure+netting **content** (and improves it — exact
+sampling, path-wise heterogeneity). But its **consumed surface is a generic multi-asset process
+framework**, not rates netting:
+
+- `ExposureResult` — **0 consumers** anywhere, source or the 952 test files ⇒ `dead`.
+- `ExposureEngine` — exactly **one** production consumer, `models/mc_instrument_adapters.py`, using
+  it for *"Equity exposure + CVA/DVA/FVA"* over a **`BlackScholesProcess`**, through the engine's
+  `ProcessSpec` + `revalue`-callback generality.
+
+ng's MC exposure is deliberately HW-specific (§6b), so the surface actually consumed has no ng
+counterpart. **B7's bar therefore does not move on rates netting** — `mc_exposure.py` crosses with a
+**generic process abstraction**, i.e. the equity-MC / `mc_*` framework slice. Forward-linked there.
+This is the second time the consumer-narrow rule from `CP_credit_vertical.md` §2 has overturned a
+tick expectation (`vol_arbitrage_scanner` was the first), and both times by asking *which* names the
+importers use rather than how much of the file looks covered.
+
+`TEST_FLOOR` 494 → 510.
+
 ## [0.126.0] - 2026-10-27
 
 **MC exposure — ng's first simulation, anchored to the closed form.** Spec:

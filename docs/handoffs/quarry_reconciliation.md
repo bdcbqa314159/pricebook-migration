@@ -459,6 +459,28 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   `risk/xva.py`'s residual is unchanged at 12 of 13 functions.
   Evidence: `spec_mc_exposure_slice.md` + `CHANGELOG` v0.126.0.
 
+- **MC slice-2 netting retire read (0 TICKS — PARTIAL; 26 / 793 unchanged. The tick was EXPECTED
+  here and the evidence says no):** `quarry/pricebook/models/mc_exposure.py` (163 lines).
+  **Superseded:** the exposure+netting *content* — ng's `mc_netted_exposure_profile` nets path-wise
+  (so it handles the heterogeneous set the analytic proxy must refuse) and is **exactly sampled**
+  (HW's forward-measure Gaussian, no Euler bias, where the quarry steps an SDE).
+  **NOT superseded, and this is the whole verdict:** the module's consumed surface is a **generic
+  multi-asset process framework**, not rates netting. Evidence —
+  `ExposureResult` has **0 consumers** anywhere (source *or* the 952 test files) ⇒ `dead`;
+  `ExposureEngine` has exactly **one** production consumer, `models/mc_instrument_adapters.py`, and
+  it uses it for *"Equity exposure + CVA/DVA/FVA"* over a **`BlackScholesProcess`** — a different
+  asset class, reached through the engine's `ProcessSpec` + `revalue`-callback generality. ng's MC
+  exposure is deliberately HW-specific (§6b: one model, its first consumer), so the surface that is
+  actually consumed has no ng counterpart.
+  **Consequence for planning (this is the useful part):** B7's bar does **not** move on rates
+  netting. `mc_exposure.py` crosses when ng gains a **generic process abstraction** — i.e. with the
+  equity-MC / `mc_*` framework slice — because that is what its consumer wants.
+  `deferred→` the generic-process (mc_*) framework slice; `ExposureResult` → `dead` (shed).
+  The quarry also bundles CVA/DVA/FVA *inside* the engine; ng deliberately splits profile from atom
+  (the `cva`-signature gate), so that bundling is shed rather than residual.
+  `risk/xva.py` residual unchanged at 12 of 13 functions.
+  Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
