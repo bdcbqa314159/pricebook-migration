@@ -30,7 +30,10 @@ from pricebook.foundation import Currency, Money, PricingFailure, PricingResult
 from pricebook.market.snapshot import MarketSnapshot
 from pricebook.models.protocols import CalibratedModel
 from pricebook.market.curve_set import CurveKey
-from pricebook.risk import Priceable, ir_delta, priceable
+from pricebook.foundation.reference_entity import ReferenceEntity
+from pricebook.products.swap import VanillaSwap
+from pricebook.risk import Priceable, ir_delta, netted_exposure_profile, priceable
+from pricebook.risk.xva import cva
 
 Product = object  # a registered L2 product; the engine dispatches by type, so the shell stays type-blind
 
@@ -124,3 +127,40 @@ def book_dv01(book: Book, model: CalibratedModel, key: CurveKey) -> float | Pric
     L5 greek verbatim on the book-as-`Priceable`. (`key` names the curve to bump — same shape as L5
     `ir_delta(p, market, key)`; the ratified `book_dv01(book, model)` couldn't say WHICH curve.)"""
     return ir_delta(book_priceable(book, type(model)), model.market, key)
+
+
+def book_cva(
+    book: Book, model: CalibratedModel, entity: ReferenceEntity
+) -> float | PricingFailure:
+    """The unilateral CVA of a netting set — `book` under counterparty `entity`.
+
+    **This lives at L6, not in `risk/`, because a netting set is a portfolio concept.** L5 risk takes
+    *positions*; a `Book` of `Trade`s is the shell's. Putting it in `risk/` was tried and the acyclic
+    gate named it immediately — `risk(L5) imports shell(L6)` — and since `portfolio.py` already
+    imports `risk`, it was a genuine cycle rather than a stylistic preference.
+
+    The shell unwraps and delegates; it does not compute (§0). It extracts the products, hands them
+    to L5's `netted_exposure_profile`, and L5's `cva` does the integral — the same division `mark`
+    already follows by calling the engine rather than pricing itself.
+
+    A non-swap product has no swaption-equivalent exposure, so it is a `PricingFailure` rather than a
+    skipped trade: a quietly dropped trade understates the charge, which is the one direction a CVA
+    must never be wrong in."""
+    swaps: list[VanillaSwap] = []
+    for trade in book.trades:
+        for product in trade.products:
+            if not isinstance(product, VanillaSwap):
+                return PricingFailure(
+                    f"the analytic netted exposure needs a swap-equivalent set; got "
+                    f"{type(product).__name__} — a heterogeneous set defers to MC exposure"
+                )
+            swaps.append(product)
+    profile = netted_exposure_profile(swaps, model)
+    if isinstance(profile, PricingFailure):
+        return profile
+    try:
+        survival = model.market.curves.survival(entity)
+        recovery = model.market.recovery(entity)
+    except (KeyError, ValueError) as exc:
+        return PricingFailure(f"CVA: {exc}")
+    return cva(profile, survival, recovery)

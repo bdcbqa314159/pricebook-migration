@@ -11,6 +11,53 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.124.0] - 2026-10-26
+
+**XVA slice 2 — netting, and it was the test of slice 1's split.** Spec:
+`docs/handoffs/spec_xva_slice2_netting.md` (Cowork, thread 0034). **467 tests** (was 454). Drawdown
+unchanged at 26 / 793 — the spec expected 0 ticks; the bar moves at the MC-exposure slice.
+
+### The split held — and the claim is now a gate
+Netting changed the **exposure method** and required **zero** change to `cva`.
+`test_cva_signature_is_UNCHANGED_by_netting` asserts `cva`'s signature literally, so a future slice
+cannot quietly move netting logic into the atom and end up with two CVA definitions. The design
+decision became a check.
+
+### Added — netting where the set nets to a swap-equivalent
+- **L5 `netted_exposure_profile(swaps, model)`** — nets the positions **first**, then takes the
+  exposure on the net. That order *is* netting: `EE(max(Σ MtM, 0)) ≤ Σ EE(max(MtM, 0))`, because
+  exposure is convex in the position and offsetting trades cancel *before* the floor at zero rather
+  than after. Summing exposures would lose exactly the benefit netting exists to capture.
+- The net swap adds signed notionals and takes the **notional-weighted** fixed rate, so its single
+  fixed leg pays what the set's legs pay.
+- **L6 `shell.book_cva(book, model, entity)`** — unwraps the netting set and delegates.
+
+### Fixed — a §1 layering violation in the spec's own instruction
+The spec said to reuse `shell.Book` as the netting grouping. **`Book` is L6 and risk is L5**, so the
+first implementation was an upward import, and `verify.py acyclic` named it immediately:
+`risk/exposure.py: risk(L5) imports shell(L6) — upward import`. It was a genuine cycle, not a
+stylistic point — `shell/portfolio.py` already imports `risk`.
+
+Resolved by putting the layers where the concepts are: **L5 takes positions** (`swaps`), the
+**netting set stays L6** (a `Book` of `Trade`s), and `book_cva` lives in the shell beside `mark`,
+which already follows the same unwrap-and-delegate division (§0: the shell never computes).
+
+### Oracles — 13 new, the netting identities
+**Degenerate:** a book of one trade gives the slice-1 profile and charge **byte-identically** —
+netting of one is the identity. **Netting benefit:** netted CVA ≤ Σ standalone across three sets,
+with same-direction trades showing *no* benefit (within 1e-6) and offsetting ones a **strict** one
+(>10%) — so the test distinguishes real netting from a sum. **Perfect offset:** a payer plus an
+identical receiver nets to zero exposure and zero CVA, *and* each leg standalone is non-zero, so the
+zero is cancellation rather than two zeros — this also prices the **receiver direction** that slice 1
+derived but never exercised, closing that flag. Plus `hazard → 0 ⇒ CVA → 0` on the netted profile,
+the count, and bump-consistency (recovery moves it by exactly the LGD ratio).
+
+**A heterogeneous set is a `PricingFailure` naming which two indices and where it defers**, never a
+silent mis-net: netting incompatible positions into a plausible number is the worst outcome
+available, and the analytic proxy genuinely cannot do it.
+
+`TEST_FLOOR` 454 → 467.
+
 ## [0.123.0] - 2026-10-26
 
 **B7 opens — unilateral CVA of one swap, swaption-approximation exposure.** Spec:

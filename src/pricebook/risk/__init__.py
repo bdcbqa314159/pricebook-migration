@@ -6,7 +6,7 @@ one `Bump` strategy per shape. Nothing at L≤4 imports this layer (enforced by 
 """
 
 from pricebook.risk.bump import Bump, CurveBasisBump, CurveIdentityBump, SurfaceBump
-from pricebook.risk.exposure import swaption_exposure_profile
+from pricebook.risk.exposure import netted_exposure_profile, swaption_exposure_profile
 from pricebook.risk.xva import cva, swap_cva
 from pricebook.risk.credit import bucketed_cs01, cs01, jump_to_default, rec01
 from pricebook.risk.greeks import central_diff, ir_basis_delta, ir_delta, vol_vega
@@ -30,4 +30,5 @@ __all__ = [
     "cva",
     "swap_cva",
     "swaption_exposure_profile",
+    "netted_exposure_profile",
 ]
