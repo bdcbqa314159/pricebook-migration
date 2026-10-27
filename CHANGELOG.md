@@ -11,6 +11,51 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.128.0] - 2026-10-27
+
+**XVA / MC-exposure checkpoint (§6 hard stop at a capability-cluster boundary), and the
+consumer-narrow rule promoted into the law.** Report: `docs/handoffs/CP_xva_mc.md`, four review
+inputs plus the named next checkpoint. No pricing logic touched; drawdown unchanged at 26 / 793.
+
+### Changed — CLAUDE.md §4 gains a tick rule, on its second instance
+> **The consumed surface decides the tick — and steers the targeting.** A module ticks when the names
+> its importers actually use are superseded, never when the file "looks mostly covered".
+
+Promoted by §6's second-instance convention (the same bar the floor rule cleared). Both instances were
+tick *expectations overturned by evidence*: `vol_arbitrage_scanner` (ng had no arb machinery and its
+consumer was live) and `models/mc_exposure.py` (consumed as a generic process framework over a
+`BlackScholesProcess`, not as rates netting — `ExposureResult` had **0** consumers anywhere). The
+second clause is the new capability: it gives a way to *target* ticks deliberately rather than
+discovering after the fact that a fat file will not move.
+
+### Added — `docs/handoffs/CP_xva_mc.md`
+**Oracle-quality audit** naming three shapes this arc added: the **forward-measure sampler oracle**
+(checks the sampler's own mean/variance against `f(0,t)` — catches the dropped-drift `σ²B²/2` bias
+that a convergence test is blind to, since a biased sampler still converges); **convergence as a
+rate** rather than a tolerance (twice the right assertion — Ho-Lee's `O(a·dt²)`, MC's `1/√P`); and the
+**`cva` signature gate**, which has now survived three exposure methods.
+
+**Finding O1** — the `cva` atom's composition is never checked against a *published* CVA. Every link
+in the chain is rung-1, but the whole has no external reference, so a shared misconception in the CVA
+definition would pass everything. `NG-DEFER-CREDITISDA`'s trigger closes it too; recorded there rather
+than as a new entry.
+
+**Drawdown:** B7 at **five slices, zero ticks**, stated plainly with the reason — the bar moves on a
+generic process abstraction, which *is* the equity gateway, so §4's "breadth waits while drawdown is
+stuck" is in tension with the bar-mover being new breadth. A milestone fork, surfaced to Bernardo
+rather than settled in the thread.
+
+**Smell+debt:** 5 live ledger items, unchanged. `SwaptionPrice` recorded as **pending ruling, not
+debt** — ruled in 0038, deferred by 0040, HW's guard holding until it lands. Plus a noted non-gate:
+**the clock**. MC's first implementation took 73s for one test file and was caught by noticing, not by
+a check; `TEST_FLOOR` counts tests, not seconds.
+
+### Six challenge-me items
+Including two I think are genuinely open: whether `_pending_swap` should be **deleted and asserted
+absent** when `SwaptionPrice` lands (the `ProtectionWindow` make-it-unwritable pattern), and whether
+the profile type should *carry* that its draws are marginals so a WWR slice cannot silently consume
+them as joint paths.
+
 ## [0.127.0] - 2026-10-27
 
 **MC netting — and the heterogeneous set that analytic cannot price.** Spec:
