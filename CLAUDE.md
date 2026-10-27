@@ -318,6 +318,16 @@ the whole spine, and a sibling to §1's no-`isinstance` law.
   A module ticks deletable only when the genuine residual is empty **and** every omission is
   classified with evidence. Cowork spot-checks `shed:` calls at each checkpoint and may **un-tick**
   (drawdown −1); the quarry is git-tracked, so a reversal is cheap and nothing is lost.
+- **The consumed surface decides the tick — and steers the targeting** (promoted 2026-10-27, §6
+  second-instance convention; ruling `docs/handoffs/rulings_CP_credit_vertical.md` → thread 0042). A
+  module ticks when **the names its importers actually use** are superseded, never when the file
+  "looks mostly covered"; re-derive by asking *which names the importers use*, never by
+  feature-diffing the file. Twice a tick expectation was overturned exactly here —
+  `options/vol_arbitrage_scanner.py` (ng had no arb machinery at all, and its consumer was live) and
+  `models/mc_exposure.py` (consumed as a **generic process framework** over a `BlackScholesProcess`,
+  not as rates netting; `ExposureResult` had 0 consumers anywhere). **Steer by
+  consumed-surface-narrowness:** target modules whose importers use a narrow surface; a fat file with
+  a wide consumed surface does not tick until that surface is superseded or its consumers cross.
 - **A residual needs consumer evidence too (symmetric to `dead`).** A quarry feature ng lacks is a
   *genuine* residual only if **something consumes it** — same evidence protocol as below.
   Feature-diffing a quarry module against its ng counterpart **overstates** residuals: a "gap" that
