@@ -437,6 +437,19 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   `deferred→` MC exposure, never a silent mis-net.
   Evidence: `spec_xva_slice2_netting.md` + `CHANGELOG` v0.124.0.
 
+- **Hull-White slice retire read (0 TICKS — PARTIAL):** `quarry/pricebook/models/hull_white.py`
+  (299 lines) crosses **partially** as ng `models/hull_white.py`. **Superseded:** `B`, `_log_A`,
+  `_forward_rate`, `zcb_price` — the A/B closed forms, mined for content; and the European swaption,
+  which ng does by **Jamshidian closed form** where the quarry used a trinomial tree.
+  **Resident residual:** `_evolve_state_prices` / `tree_zcb` / `build_tree_alphas` /
+  `tree_european_swaption` → **the trinomial tree**, a numerical method whose consumers are
+  American/Bermudan exercise and path dependence → `deferred→` the lattice slice; path **simulation**
+  → `deferred→` the MC-exposure slice (§6b: simulation's first consumer is MC, so it arrives with
+  MC, not here); term-structure `σ(t)` → `deferred→` a multi-expiry calibration consumer.
+  **No tick:** ng supersedes the analytics and not the numerics, and the tree is the bulk of the
+  quarry module. Evidence: `spec_hull_white_slice.md` + `AUDIT_hull_white_capability.md` +
+  `CHANGELOG` v0.125.0.
+
 - **Forward-links written onto the rows that will be read (§4 "forward-link every `deferred→X`"):**
   - `options/synthetic_swaption_data.py` — **on crossing:** it imports `SwaptionVolCube` and
     `build_swaption_vol_cube` from the now-deletable module. Re-point at ng's
