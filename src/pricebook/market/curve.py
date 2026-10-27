@@ -33,12 +33,20 @@ from pricebook.foundation import (
 
 
 class CurveHandle(Protocol):
-    """The discounting capability — a discount factor to a date, and a `bumped` copy for risk.
-    Depend on this, not the concrete curve (docs/19 §3); risk (L5) bumps through it."""
+    """The discounting capability — a discount factor to a date, a `bumped` copy for risk, and the
+    `date → t` map the curve measures time in.
+
+    Depend on this, not the concrete curve (docs/19 §3); risk (L5) bumps through it. `time_measure`
+    is on the capability for the same reason `SurvivalHandle.time_basis` is: a model that *fits*
+    against the curve (Hull-White's θ, any integral over it) needs the curve's own basis, and
+    reaching for it with `getattr` would be the inspect-the-object pattern §1 forbids."""
 
     def df(self, d: date) -> float: ...
 
     def bumped(self, shift: float) -> CurveHandle: ...
+
+    @property
+    def time_measure(self) -> TimeMeasure: ...
 
 
 @dataclass(frozen=True)

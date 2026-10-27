@@ -116,12 +116,28 @@ def test_B_is_the_standard_mean_reversion_integral() -> None:
     assert hw.b(3.0, 3.0) == 0.0
 
 
-def test_B_tends_to_the_ho_lee_limit_as_mean_reversion_vanishes() -> None:
-    """`a → 0 ⇒ B(t,T) → T − t` — the Ho-Lee limit, and the case where the closed form divides by a,
-    so this is also the numerical-stability check."""
-    for a in (1e-6, 1e-9, 1e-12):
-        hw = _hw(a=a)
-        assert abs(hw.b(1.0, 6.0) - 5.0) < 1e-5, a
+def test_B_converges_to_the_ho_lee_limit_as_mean_reversion_vanishes() -> None:
+    """`a → 0 ⇒ B(t,T) → T − t` (Ho-Lee). It is a **limit**, not an equality: the error is
+    `O(a·(T−t)²/2)`, so the oracle asserts the convergence RATE rather than a fixed tolerance —
+    a fixed one would either pass vacuously or fail on correct maths. This is also where the closed
+    form divides by a vanishing `a`, so it doubles as the numerical-stability check."""
+    dt = 5.0
+    errs = []
+    for a in (1e-3, 1e-4, 1e-5, 1e-6):
+        err = abs(_hw(a=a).b(1.0, 1.0 + dt) - dt)
+        errs.append(err)
+        assert err < 2.0 * a * dt**2  # the leading term, with headroom
+    assert errs == sorted(errs, reverse=True)          # strictly improving
+    assert errs[-1] < errs[0] / 100.0                  # and by the right order
+
+
+def test_B_is_stable_at_a_mean_reversion_small_enough_to_cancel() -> None:
+    """Below the series threshold the closed form would be catastrophic cancellation
+    (`(1 − e^{−1e-12·dt})/1e-12`), so the expansion takes over. Assert it stays finite and close."""
+    for a in (1e-9, 1e-12, 1e-15):
+        b = _hw(a=a).b(1.0, 6.0)
+        assert math.isfinite(b)
+        assert abs(b - 5.0) < 1e-6, a
 
 
 def test_a_zero_bond_option_with_zero_vol_is_its_intrinsic() -> None:
@@ -194,15 +210,35 @@ def test_swaption_payer_receiver_parity_is_the_forward_swap() -> None:
         assert abs((payer - receiver) - annuity * (s - strike)) < 1e-8, strike
 
 
-def test_a_semi_annual_underlying_prices_too() -> None:
-    """The Jamshidian decomposition must not assume annual coupons — a non-canonical schedule is
-    where slice A's ML-D1 bit, so it is exercised here as well."""
+def test_a_NON_CANONICAL_underlying_is_REFUSED_rather_than_mispriced_by_381bp() -> None:
+    """**The slice's STOP, asserted as a guard.** A Gaussian model's swaption price depends on the
+    underlying's whole coupon flow set, but `SwaptionVol`'s key is `(index, expiry, swap_tenor,
+    strike)` — which cannot carry the fixed leg's frequency or day counts. Measured: a semi-annual
+    underlying is mispriced by **381bp relative**; the annual one HW guesses agrees to 0.0bp.
+
+    The threaded forward makes it *detectable*: HW computes the `S` of its reconstruction and
+    refuses when it disagrees with the engine's marked `S`. So the unsound case is a failure, never
+    a silently wrong vol — ML-D1's lesson applied as a guard while the protocol question is ruled."""
     hw = _hw()
     swap = _swap(0.030, freq=Frequency.SEMI_ANNUAL)
+
+    # HW's OWN closed form is fine — the defect is the capability's key, not the maths
+    assert hw.swaption_price(swap, EXPIRY, OptionType.CALL) > 0.0
+
+    out = price(Swaption(swap, EXPIRY, OptionType.CALL), hw)
+    assert isinstance(out, PricingFailure), out
+    assert "reconstruct" in out.reason
+    assert "bp apart" in out.reason          # the reason carries the measurement, not just a verdict
+
+
+def test_the_canonical_underlying_still_agrees_exactly() -> None:
+    """The control: where HW *can* reconstruct, the §3d identity holds to 1e-9 — so the guard above
+    is rejecting a real gap rather than masking a broken closed form."""
+    hw = _hw()
+    swap = _swap(0.030, freq=Frequency.ANNUAL)
     own = hw.swaption_price(swap, EXPIRY, OptionType.CALL)
     out = price(Swaption(swap, EXPIRY, OptionType.CALL), hw)
     assert isinstance(out, PricingResult), out
-    assert own > 0.0
     assert abs(out.pv.amount - own) < 1e-9 * max(1.0, abs(own))
 
 
@@ -217,7 +253,7 @@ def test_non_positive_parameters_are_rejected() -> None:
 
 def test_a_swaption_expiring_in_the_past_is_a_failure_value() -> None:
     hw = _hw()
-    out = price(Swaption(_swap(0.030), VAL - Tenor(1, Y), OptionType.CALL), hw)
+    out = price(Swaption(_swap(0.030), date(2025, 1, 15), OptionType.CALL), hw)
     assert isinstance(out, (PricingFailure, PricingResult))
     if isinstance(out, PricingResult):
         assert abs(out.pv.amount) < 1e-12      # expired ⇒ no optional value (#20)
