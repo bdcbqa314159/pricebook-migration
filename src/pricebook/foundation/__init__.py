@@ -122,7 +122,7 @@ from pricebook.foundation.solvers import (
 )
 from pricebook.foundation.tenor import Tenor, TenorUnit
 from pricebook.foundation.time_measure import TimeMeasure
-from pricebook.foundation.numerics import IntegrationConfig
+from pricebook.foundation.numerics import IntegrationConfig, MonteCarloConfig
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.foundation.underlying import AssetClass, Underlying
 
@@ -216,6 +216,7 @@ __all__ = [
     "Underlying",
     "AssetClass",
     "IntegrationConfig",
+    "MonteCarloConfig",
     "ReferenceEntity",
     # instrument atoms
     "Cashflow",
