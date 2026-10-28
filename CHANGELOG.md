@@ -11,6 +11,67 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.132.0] - 2026-10-28
+
+### Added
+- **`weighted_annuity(schedule, notionals, day_count, curve) = Σ Nᵢ·τᵢ·df(payᵢ)`** and its float
+  sibling **`weighted_float_leg_pv`** (`market/building_blocks.py`) — the variable-notional
+  generalisations of `rpv01` and `float_leg_pv`. Both are built on a **shared per-period
+  derivation** (`_annuity_terms`, `_float_terms`): the flat and weighted atoms sum the *same*
+  `τ·df` terms, so they cannot drift apart on day count, ICMA context, or discounting (§3d — an
+  atom derived once and weighted two ways, never re-derived). **Discharges the standing
+  forward-link** "on crossing `swap.py`: expose `annuity`/`weighted_annuity` as a building block" —
+  `rpv01` was the `annuity` half, this is the other.
+- **`FixedLeg.notionals` / `FloatLeg.notionals`** (`tuple[float, ...] | None`) — the per-period
+  notional schedule, with `None` the constant-notional case. A flat swap is the **degenerate
+  schedule**, not a separate product: no `VariableNotionalSwap`, and no `isinstance` in the engine.
+  Misalignment between a notional schedule and its accrual periods is **refused at construction**.
+- **`VanillaSwap.notional_schedule()` / `.average_notional()`** — the two readers the quarry desks
+  consume. `average_notional` is the **arithmetic** mean, matching the quarry's stated definition
+  verbatim (not time- or annuity-weighted) so a crossing desk reports the same number.
+
+### Changed
+- **The engine composes ONE annuity for both kinds.** `price_swap` now always weights per period;
+  the constant-notional swap is the flat schedule it lives inside. The notionals are mapped to the
+  priced periods **by `accrual_start`, not by index** — `future_periods` drops historical periods,
+  so a positional alignment would slide an amortiser onto the wrong rung of its own ladder, and no
+  par-swap oracle would catch it (a flat schedule slides onto itself).
+
+### Oracles
+- **Strip decomposition (structural, §6):** an amortising swap with notionals (300k, 200k, 100k)
+  **equals** a 1Y + 2Y + 3Y strip of 100k vanilla swaps at the same fixed rate, each priced by the
+  **existing** engine — so the right-hand side never touches the code under test. Guarded by a
+  second test asserting the schedules genuinely **nest** (each tenor's accrual dates are a prefix
+  of the next); without that, the strip identity would be comparing swaps with different dates and
+  the agreement would be luck.
+- **The §3d identities:** `weighted_annuity(flat N) ≡ N·rpv01` and
+  `weighted_float_leg_pv(flat N) ≡ N·float_leg_pv`, to 1e-12. Deliberately **not** short-circuited
+  in the implementation — a flat schedule takes the same summation every other schedule takes, so
+  these stay real assertions rather than tautologies about an `if`.
+- Readers; and a guard that `amortising`/`accreting`/`roller_coaster` are **absent**.
+
+### Known difference (drift from the spec, recorded not hidden)
+- **Byte-identity for existing constant-notional swaps does NOT hold, and could not.** The spec made
+  both "one `weighted_annuity` composition, flat or not" and "existing swaps byte-identical"
+  load-bearing; they are **in conflict**, because `Σ(Nᵢ·tᵢ) ≠ N·Σtᵢ` in floating point. Measured
+  across 60 swap PVs (4 tenors × 5 strikes × 3 notionals): **22 of 60 changed, maximum
+  |Δ| / notional = 2.9e-17** — pure last-digit re-association, far inside every tolerance the tree
+  asserts, and **no existing test moved** (526 green; the 32-point Black/SABR capture is still
+  byte-identical). Chose the single composition: §7c makes tolerance-based oracles the hard rule and
+  scopes byte-identity to same-process statelessness, while preserving bit-equality here would need
+  a second flat-only path — the "atom re-derived in one stage" smell §3d forbids. Flagged to Cowork.
+
+### Migration
+- **Retire-read `fixed_income/swap.py` — TICK PROPOSED (29 → 30 / 793), not applied.** Consumed
+  surface `InterestRateSwap` + `SwapDirection` (10 live importers): `pv`/`par_rate`/`annuity`/`dv01`/
+  `cashflow_schedule` were already superseded, and `notional_schedule`/`average_notional` are now.
+  `shed:` `amortising`/`accreting`/`roller_coaster` → **`dead`** (resolved-name evidence under the
+  new §4 clause: 24/2/0 bare source hits, **0 of them resolving to `swap.py`**); `create_swap` →
+  test-only; `from_convention` → `deferred→conventions` (standing row); `par_rate` →
+  `deferred→` its first real ng consumer — CLAUDE.md §4 names swap's `par_rate` as the example of a
+  deferrable *capability*, and ng's `_par_rate` is private to the calibrator with no second consumer
+  (§6b rule of two). `TEST_FLOOR` 518 → 526.
+
 ## [0.131.0] - 2026-10-28
 
 ### Migration
