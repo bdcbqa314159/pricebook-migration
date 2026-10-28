@@ -20,6 +20,8 @@ Provenance:
 
 from __future__ import annotations
 
+import math
+
 from collections.abc import Sequence
 
 from dataclasses import dataclass
@@ -183,6 +185,17 @@ def weighted_float_leg_pv(
             f"notional schedule has {len(notionals)} entries for {len(terms)} accrual periods"
         )
     return sum(n * t for n, t in zip(notionals, terms))
+
+def equity_forward(spot: float, dividend_yield: float, df: float, t: float) -> float:
+    """The equity forward `F = S·e^{(r−q)·t}`, written as **`S·e^{−q·t}/df`** so the financing leg
+    comes from the discount factor the pricer already holds rather than from a second `r`.
+
+    That substitution is the point (§3d): `e^{r·t} = 1/df` by definition of the curve, so taking
+    `r` as a separate input would be re-deriving a number the curve already owns — and the two
+    would then be free to disagree whenever the curve is not flat. There is no `r` parameter here
+    on purpose."""
+    return spot * math.exp(-dividend_yield * t) / df
+
 
 # ── credit atoms (B6 slice 1) — the credit `rpv01`, defined ONCE ────────────────────────────
 def risky_annuity(

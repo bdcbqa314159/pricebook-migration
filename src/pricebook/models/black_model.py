@@ -20,8 +20,14 @@ from dataclasses import dataclass
 from datetime import date
 
 from pricebook.foundation import RateIndex, Tenor
+from pricebook.foundation.equity import EquityUnderlying
 from pricebook.market.snapshot import MarketSnapshot
-from pricebook.market.vol_surface import SurfaceKey, SwaptionSurfaceKey, flat_surface
+from pricebook.market.vol_surface import (
+    EquitySurfaceKey,
+    SurfaceKey,
+    SwaptionSurfaceKey,
+    flat_surface,
+)
 from pricebook.models.black import vol_time_measure
 from pricebook.models.vol_law import Lognormal, VolLaw
 
@@ -50,3 +56,11 @@ class BlackModel:
         del forward  # as above — a flat swaption surface carries no S dependence
         tm = vol_time_measure(self.market.valuation_date)
         return flat_surface(self.market.surfaces[SwaptionSurfaceKey(index, swap_tenor)]).at(expiry, strike, tm)
+
+    def equity_vol(self, underlying: EquityUnderlying, expiry: date, strike: float) -> float:
+        """The `EquityVol` capability — a THIRD opt-in capability on this model, added the same
+        additive way `swaption_vol` was: no change to `market`, no change to the rate vol reads,
+        so every existing number stays byte-identical. One model, three capabilities, chosen
+        structurally by the engines."""
+        tm = vol_time_measure(self.market.valuation_date)  # the canonical vol clock (§3d, #4)
+        return flat_surface(self.market.surfaces[EquitySurfaceKey(underlying)]).at(expiry, strike, tm)

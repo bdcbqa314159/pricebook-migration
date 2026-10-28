@@ -11,6 +11,64 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.134.0] - 2026-10-28
+
+### Added
+- **Equity opens — (c) slice 1, the vanilla European option by closed form.** The arc's **oracle
+  anchor**: the later equity MC (c3) is checked against this, exactly as rates MC is checked
+  against the swaption approximation, and the green-oracle gate wants closed form before MC.
+- **L0 — `foundation/equity.py: EquityUnderlying`.** The asset class's *entire* L0 footprint:
+  **one** identity sibling under `Underlying` (§3c corollary), frozen and hashable so it keys the
+  snapshot by value. Carries no price, vol or dividend — those are market state that risk bumps,
+  and putting them here would give each two homes (the mistake `RecoveryKey` exists to undo).
+- **L1 — keys, not fields (§3c).** `EquitySpotKey` and `DividendYieldKey` into `scalars`;
+  `EquitySurfaceKey` into `surfaces`. **No new snapshot field.** Spot and dividend yield are
+  *separate* keys rather than one combined key, because they are independently bumped: a combined
+  key would make a dividend bump indistinguishable from a spot bump at the snapshot.
+- **L1 — `equity_forward(spot, dividend_yield, df, t) = S·e^{−q·t}/df`.** Written against the
+  discount factor rather than against a separate `r`: `e^{r·t} = 1/df` by definition of the curve,
+  so taking `r` as its own input would re-derive a number the curve already owns and let the two
+  disagree whenever the curve is not flat (§3d). There is deliberately no `r` parameter.
+- **L2 — `products/equity.py: EquityOption`** (underlying, strike, expiry, option_type, currency).
+  Five fields, pure data. `currency` IS a field: deriving it from the snapshot reads fine in a
+  single-currency book and silently marks a EUR option off the USD curve the moment the snapshot
+  holds two — a wrong number with no error.
+- **L3 — the `EquityVol` capability**, a sibling of `ImpliedVol` keyed by `EquityUnderlying`, added
+  to `BlackModel` **additively** (its third capability, the same way `swaption_vol` was added): no
+  change to `market`, no change to the rate vol reads, every existing number untouched.
+- **L4 — `engine/equity.py: price_equity_option`.** `PV = df·black(F, K, σ, t, type)` — **no new
+  pricing formula**; BSM and Black-76-on-the-forward are one model written two ways, so the slice's
+  content is the forward construction. Capability dispatch (`EquityVol`), no `isinstance` on a
+  concrete model, so a later smile or local-vol model drops in untouched.
+
+### Oracles (rung 1 — closed form)
+- **Matches the Black-Scholes-Merton SPOT form to 1e-10** across 5 strikes × call/put × two
+  dividend yields. The reference is written directly in (S, K, r, q, σ, T) and never forms `F`, so
+  it is an independent arrangement of the same mathematics rather than a re-run of ng's own
+  composition — it tests the *finance* (the forward and the discounting), per §7bb.
+- Textbook value 10.4506 (S=K=100, σ=20%, T=1, r=5%, q=0); **put-call parity `C − P = df·(F − K)`**
+  (model-free, so it checks the forward against the discount); the forward identity
+  `F = S·e^{(r−q)t}`; q↑ lowers the call monotonically; q=0 reduces to no-dividend BS.
+- **σ→0 is the discounted intrinsic ON THE FORWARD, not on spot** — the trap: at r=5%, q=0 the
+  forward is 105.13, so a K=102 call is worth 2.98, while spot intrinsic would call it worthless.
+- Expiry-at-valuation → intrinsic; an unmarked underlying → `PricingFailure`, not a crash or a
+  silent zero (invariant 4); the L0 identity satisfies `Underlying` and keys by value.
+
+### Changed
+- **`ScalarKeyType` alias** in `market/snapshot.py`. A `Mapping` key is **invariant**, so without a
+  named alias every producer of a scalars dict must restate the full key union — and each new asset
+  class would break them all at once. Widen in one place; producers annotate with the alias.
+
+### Migration
+- **Retire-read `quarry/pricebook/options/equity_option.py` — 0 TICKS, PARTIAL, 30 / 793
+  unchanged**, as the spec expected (equity is greenfield). `equity_option_price` is superseded;
+  the **greeks suite** (`equity_delta`/`gamma`/`vega`/`theta`/`rho`/`greeks`) is a genuine residual
+  on consumer evidence — **4 live importers**. The structural reason: **ng has no spot bump.**
+  `risk/bump.py` carries curve/surface/survival/recovery bumps and its header already anticipates
+  that an FX-spot `ScalarBump` "arrives with its first consumer" — **this slice creates that first
+  consumer.** `deferred→` a new **equity-greeks / `ScalarBump`** destination row, with the four
+  consuming modules named. `TEST_FLOOR` 526 → 536.
+
 ## [0.133.0] - 2026-10-28
 
 ### Migration
