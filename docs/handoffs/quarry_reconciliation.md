@@ -590,6 +590,27 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   wants the quarry's `par_rate`), but the row says 9, not 10.
   Evidence: `spec_variable_notional_swap.md` + `tests/L4/test_variable_notional_swap.py` +
   `CHANGELOG` v0.132.0.
+
+- **Equity slice c1 retire read (0 TICKS — PARTIAL, as the spec expected; 30 / 793 unchanged):**
+  `quarry/pricebook/options/equity_option.py` (262 lines, **5 live importers**) is the quarry's
+  vanilla equity module. Equity is greenfield, so c1 opens the asset class the way credit slice 1
+  did rather than retiring anything.
+  **Superseded:** `equity_option_price` → ng `engine/equity.price_equity_option`, which composes
+  `equity_forward` + the existing `black` atom (no new pricing formula, §3d) and is oracled against
+  the Black-Scholes-Merton **spot** form to 1e-10.
+  **Resident residual — the GREEKS suite, and it is the whole gap:** `equity_delta`, `equity_gamma`,
+  `equity_vega`, `equity_theta`, `equity_rho`, `equity_greeks`. Consumed by **4 live modules**
+  (`desks/api`, `desks/equity_vol_desk`, `models/models`, `models/regime_pricing`), so this is a
+  genuine residual on consumer evidence, not a feature-diff. ng cannot express equity delta or
+  gamma today for a structural reason worth recording: **ng has no spot bump.** `risk/bump.py`
+  carries curve, surface, survival and recovery bumps, and its own header already anticipates that
+  "a third key kind (FX-spot `ScalarBump`) arrives with its first consumer". This slice **creates**
+  that first consumer.
+  `deferred→` the **equity-greeks / `ScalarBump`** slice (new destination row below). The four
+  consuming modules are named there.
+  **No tick:** ng supersedes the price and not the greeks, and the greeks are most of what the
+  importers use. Evidence: `spec_equity_slice1.md` + `tests/L4/test_equity_vanilla.py` +
+  `CHANGELOG` v0.134.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -645,6 +666,15 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `fixed_income/zc_swap`, `options/midcurve_swaption`, `structured/cms` (×4). The tenth,
     `options/swaption.py`, is already crossed and does not want it — ng's swaption derives the
     forward swap rate from its own atoms.
+  - **the equity-greeks / `ScalarBump` slice** (a NEW destination row, created by the equity c1
+    retire, v0.134.0) — **on crossing:** build the **spot bump** (`ScalarBump` over an
+    `EquitySpotKey`, the third key kind `risk/bump.py` already anticipates) and the equity greeks
+    on top of it — delta and gamma by bump, vega through the existing `SurfaceBump`. That retires
+    `options/equity_option.py`'s remaining surface. **Consumers to re-point:** `desks/api`
+    (`equity_greeks`), `desks/equity_vol_desk` (`equity_vega`), `models/models` (`equity_greeks`),
+    `models/regime_pricing` (`equity_delta`, `equity_gamma`, `equity_vega`). Note ng takes greeks
+    by **bump** (`central_diff`), not by closed form, so the quarry's analytic `equity_delta`
+    formulas are content to mine, not a shape to copy (§4 mine-for-CONTENT-never-STRUCTURE).
   - **the credit-desk / CDS quote-conversion slice** (a NEW destination row, created by the
     `credit/cds_market.py` retire, v0.131.0) — **on crossing:** build the ISDA upfront leg —
     `spread_to_upfront`, `upfront_to_spread`, `bootstrap_from_upfronts` — plus the desk analytics
