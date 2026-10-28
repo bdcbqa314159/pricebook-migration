@@ -11,6 +11,34 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.133.0] - 2026-10-28
+
+### Migration
+- **Drawdown 29 → 30 / 793 — `fixed_income/swap.py` ticked** (Cowork-ruled, thread 0054). A
+  **build-and-tick**: v0.132.0 built the one missing capability (variable notional), which
+  superseded the consumed surface and ticked the module **without waiting on the desks**. This
+  completes the (b) harvest — **26 → 30, four ticks inside what is already built**.
+- **`create_swap` resolved under the test-only clause → `deferred→conventions`, not `dead`.** Its
+  only resolving consumer is `quarry/tests/test_convention_factory.py` (itself already deletable),
+  so it is not production — but it is the **same capability** as `from_convention` in
+  free-function form (build a swap from currency-defaulted conventions), so writing it off would
+  lose a real capability. It travels on the conventions row with its sibling.
+- **A new destination row for `par_rate`**, with its consumers **named** rather than a bare
+  "later": 9 un-crossed modules, 15 calls (`desks/api`, `desks/api_desk`, `desks/swap_desk` ×2,
+  `desks/swaption_desk`, `equity/rich_cheap` ×2, `fixed_income/curve_trading`,
+  `fixed_income/zc_swap`, `options/midcurve_swaption`, `structured/cms` ×4). Trivially exposable
+  when the first crosses — ng already computes `(df₀ − dfₙ)/rpv01` as the calibrator's private
+  `_par_rate`; it is deferred only because publishing it today would be a public API with one
+  consumer (§6b).
+- **Correction to the ruling's premise:** 9 of the 10 `par_rate` consumers are un-crossed, **not
+  all 10** — `options/swaption.py` ticked at v0.131.0. The verdict is unchanged (ng's swaption
+  derives the forward swap rate from its own atoms and never wants the quarry's `par_rate`), but
+  the tracker says 9.
+- The **resolved-name clause** (v0.130.0) decided the `dead` call here: `amortising`/`accreting`/
+  `roller_coaster` show 24/2/0 bare source hits and 25/12/2 in tests, with **0 resolving to
+  `swap.py`**. Under the pre-clause protocol that would have read as a live residual and blocked
+  the tick.
+
 ## [0.132.0] - 2026-10-28
 
 ### Added
