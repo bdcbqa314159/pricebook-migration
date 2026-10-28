@@ -20,6 +20,8 @@ Provenance:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -55,19 +57,53 @@ def _coupon_context(schedule: Schedule, period: SchedulePeriod, day_count: DayCo
     return coupon_period, schedule.terms.roll.calendar
 
 
+def _annuity_terms(
+    schedule: Schedule, day_count: DayCountConvention, curve: CurveHandle
+) -> tuple[float, ...]:
+    """The per-period annuity terms `τᵢ·df(payᵢ)` — the ONE derivation (§3d). `rpv01` sums them
+    unweighted and `weighted_annuity` sums them against a notional schedule, so the flat and
+    variable-notional annuities cannot drift apart on day count, ICMA context, or discounting:
+    there is nothing for them to disagree about."""
+    terms = []
+    for i, p in enumerate(schedule.periods):
+        cp, cal = _coupon_context(schedule, p, day_count, is_first=i == 0)
+        tau = Accrual(p.accrual_start, p.accrual_end, day_count).year_fraction(
+            coupon_period=cp, calendar=cal
+        )
+        terms.append(tau * curve.df(p.payment_date))
+    return tuple(terms)
+
+
 def rpv01(schedule: Schedule, day_count: DayCountConvention, curve: CurveHandle) -> float:
     """The fixed annuity — RPV01 = Σ τᵢ·df(payᵢ), discount curve only. THIS is the single
     definition of the annuity: the calibrator's `par_rate` and the engine's swap PV both
     call it (§3d), so they cannot disagree on day count or discounting. Each τ reads its
     convention context (ICMA frequency, BUS/252 calendar) from the schedule (§3d)."""
     total = 0.0
-    for i, p in enumerate(schedule.periods):
-        cp, cal = _coupon_context(schedule, p, day_count, is_first=i == 0)
-        tau = Accrual(p.accrual_start, p.accrual_end, day_count).year_fraction(
-            coupon_period=cp, calendar=cal
-        )
-        total += tau * curve.df(p.payment_date)
+    for term in _annuity_terms(schedule, day_count, curve):
+        total += term  # left-to-right, the accumulation order this always had
     return total
+
+
+def weighted_annuity(
+    schedule: Schedule,
+    notionals: Sequence[float],
+    day_count: DayCountConvention,
+    curve: CurveHandle,
+) -> float:
+    """The variable-notional annuity — `Σ Nᵢ·τᵢ·df(payᵢ)`, one notional per accrual period.
+
+    `rpv01` generalised, not duplicated: both sum `_annuity_terms`, so the §3d identity
+    **`weighted_annuity(flat N) ≡ N·rpv01` holds to floating-point** rather than by convention.
+    The identity is deliberately NOT short-circuited — a flat schedule takes the same summation
+    every other schedule takes, which keeps the oracle that asserts it a real test instead of a
+    tautology about an `if`."""
+    terms = _annuity_terms(schedule, day_count, curve)
+    if len(notionals) != len(terms):
+        raise ValueError(
+            f"notional schedule has {len(notionals)} entries for {len(terms)} accrual periods"
+        )
+    return sum(n * t for n, t in zip(notionals, terms))
 
 
 def deposit_df(rate: float, accrual: Accrual) -> float:
@@ -104,14 +140,49 @@ def float_leg_pv(
     `forward` (never inlines the df ratio, §3d). Degenerate single-curve case
     (`projection is discount`, no lag) equals `df(start₀) − df(endₙ)`."""
     total = 0.0
+    for term in _float_terms(schedule, day_count, discount, projection):
+        total += term  # left-to-right, the accumulation order this always had
+    return total
+
+
+def _float_terms(
+    schedule: Schedule,
+    day_count: DayCountConvention,
+    discount: CurveHandle,
+    projection: CurveHandle,
+) -> tuple[float, ...]:
+    """The per-period floating terms `df_disc(payᵢ)·τᵢ·forward(accrualᵢ)` — the ONE derivation,
+    summed unweighted by `float_leg_pv` and against a notional schedule by
+    `weighted_float_leg_pv`. Same §3d move as `_annuity_terms`."""
+    terms = []
     for i, p in enumerate(schedule.periods):
         cp, cal = _coupon_context(schedule, p, day_count, is_first=i == 0)
         accrual = Accrual(p.accrual_start, p.accrual_end, day_count)
         tau = accrual.year_fraction(coupon_period=cp, calendar=cal)
-        total += discount.df(p.payment_date) * tau * forward(
-            projection, accrual, coupon_period=cp, calendar=cal
+        terms.append(
+            discount.df(p.payment_date)
+            * tau
+            * forward(projection, accrual, coupon_period=cp, calendar=cal)
         )
-    return total
+    return tuple(terms)
+
+
+def weighted_float_leg_pv(
+    schedule: Schedule,
+    notionals: Sequence[float],
+    day_count: DayCountConvention,
+    discount: CurveHandle,
+    projection: CurveHandle,
+) -> float:
+    """The variable-notional floating leg — `Σ Nᵢ·df_disc(payᵢ)·τᵢ·forward(accrualᵢ)`. The float
+    sibling of `weighted_annuity`, with the same identity `weighted_float_leg_pv(flat N) ≡
+    N·float_leg_pv` and the same no-short-circuit rule."""
+    terms = _float_terms(schedule, day_count, discount, projection)
+    if len(notionals) != len(terms):
+        raise ValueError(
+            f"notional schedule has {len(notionals)} entries for {len(terms)} accrual periods"
+        )
+    return sum(n * t for n, t in zip(notionals, terms))
 
 # ── credit atoms (B6 slice 1) — the credit `rpv01`, defined ONCE ────────────────────────────
 def risky_annuity(
