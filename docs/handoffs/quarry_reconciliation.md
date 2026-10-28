@@ -19,7 +19,7 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 26 / 793** — **all 26 are TICKED; none is physically moved**
+**Deletable (the §4 drawdown bar): 29 / 793** — **all 29 are TICKED; none is physically moved**
 (park-model amendment, 2026-10-26: a park is a tracker/MANIFEST state, not a `git mv` — CLAUDE.md §4,
 doc 13 §7, ruling `rulings_quarry_park_model.md`). The 19 formerly physically parked at the Topic-0
 (v0.74.0) and Topic-1 (v0.98.0) closes have been **restored to their original quarry paths**: those
@@ -498,6 +498,64 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   European swaptions only through the tree. So the partial cross is not "ng is behind", it is "ng
   has the analytics and not the numerics". Evidence: `AUDIT_hull_white_capability.md` +
   `tests/L3/test_swaption_price_capability.py` + `CHANGELOG` v0.129.0.
+
+- **Consumer-narrow sweep retire landing (+3 TICKS — 26 → 29 / 793; Cowork-ruled 2026-10-27, thread
+  0050).** The first drawdown movement since the B7 cluster opened, and the first produced by a
+  **measurement** rather than by a build: all three modules' production consumed surfaces were
+  already superseded by shipped ng code, and were invisible to feature-diffing because each module
+  is mostly code nothing imports. Method, evidence and the corrected counts:
+  `RETIRE_consumer_narrow_sweep.md` (Parts 1–2 + the ruling stamp).
+
+  - **`options/vol_surface.py` DELETABLE (+1).** Consumed surface is `FlatVol` **only** — 6 live
+    importers (`core/pricing_context`, `desks/api`, `desks/reporting`, `options/vol_calibration`,
+    `pricing/pricing_engine`, `risk/scenario`), methods `vol` and `bumped`. Superseded by ng
+    `market/vol_surface.py: Surface` + `flat_surface` + `Surface.bumped`, with the vega bump as
+    `risk/bump.SurfaceBump`. `shed:`
+    - **superseded** — `VolTermStructure`: ng's `Surface` **is** a term structure (`vols[i]` at
+      `expiries[i]`, total variance `w = σ²T` interpolated linear in `T`). Recorded first as a
+      test-only omission and corrected on re-reading ng — it was never a gap.
+    - **`deferred→arb-free-SABR slice`** — `check_calendar_arbitrage`, `check_butterfly_arbitrage`,
+      `validate_vol_surface`. A real capability ng lacks entirely; forward-linked on that row.
+    - **`dead`** — `VolSurfaceArbitrageResult`: 0 references in `quarry/pricebook` **and** 0 in
+      `quarry/tests` (AST graph + resolved bare-name; the only true `dead` of the three).
+
+  - **`options/swaption.py` DELETABLE (+1).** Consumed surface `Swaption` + `SwaptionType` by three
+    desks (`api`, `swaption_desk`, `swaption_trading_desk`); the methods they actually call are
+    `price`, `greeks`, `annuity`, `forward_swap_rate`. Superseded by ng `products/option.py:
+    Swaption` + `OptionType`, `engine: price_swaption`, `building_blocks: rpv01`/`forward`, and
+    `risk/greeks`. Supersedes the **C2 slice-2 PARTIAL** recorded above. `shed:`
+    - **`dead` — `price_swaption_sabr_hw`, the SABR-HW blender**, and on a stronger ground than
+      "unconsumed" (19 test refs, 0 production). It computes
+      `vol = w·sabr_vol + (1−w)·hw_vol`, `w = exp(−T/blend_half_life)`, with an uncited
+      `blend_half_life = 5.0` — so it could not pass the §4 green-oracle gate as written. Decisively:
+      **ng cannot express it without undoing v0.129.0** — its `hw_vol` input needs
+      `HullWhite.swaption_vol`, deleted that slice precisely because reconstructing an underlying to
+      produce it was wrong by 381bp. Its old `deferred→SABR slice` link is **stale**: the SABR slice
+      crossed without it.
+    - **superseded** — `pv_ctx`: ng's engine is `price(instrument, model)` reaching market through
+      `model.market` (§2); there is no `ctx` to pass.
+    - **`deferred→conventions`** — `_swaption_from_convention`; forward-linked on the conventions row
+      beside the ZCB/bond/OIS/FRA `from_convention` deferrals.
+
+  - **`credit/cds_market.py` DELETABLE (+1).** Consumed surface is `build_cds_curve` **only** — 3
+    live importers (`credit/recovery_analytics`, `credit/recovery_surface`, `credit/recovery_trades`)
+    — superseded by ng `calibration/credit.py: bootstrap_survival_curve`. `shed:`
+    - **`deferred→credit-desk / CDS quote-conversion slice`** — `spread_to_upfront`,
+      `upfront_to_spread`, `bootstrap_from_upfronts` (the ISDA upfront leg; ng has no upfront concept
+      at all) plus `pricing_ladder` and `roll_pnl`. A new destination row was created for them, and
+      it **shares `NG-DEFER-CREDITISDA`'s trigger** — both wait on a citable ISDA worked example.
+    - **superseded** — `reprice_spreads` (ng's credit-bootstrap round-trip oracle is exactly this)
+      and `mark_to_market` (`engine/credit.price_cds` + `shell/portfolio.mark`).
+    - **`dead`** — `LadderRung`: 0 source, 0 test references.
+
+  **Evidence method (the new §4 clauses, first applied here):** an **AST importer graph** over all
+  793 quarry modules gave each module's consumed names (it sees multi-line parenthesised imports,
+  which grep does not), then attribute-level walks of each importer gave the methods actually
+  called, then every bare-name hit was re-resolved to its defining module. That last guard mattered:
+  `cs01` showed 155 quarry hits and `roll_pnl` 32, **all** of them other modules' own definitions,
+  **all** resolving to zero against the candidates. The pool was netted against the reconciled
+  deletable set before counting — the step whose absence made the sweep's first pass report 6 ticks
+  where the honest yield is 3.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -528,10 +586,24 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   - **first consumer wanting currency-DEFAULTED swaption conventions** — **on crossing:** mine
     `options/swaption_conventions.py` for content (USD Black/semi-annual, EUR normal, the standard
     expiry/tenor grids). ng states conventions on the contract (slice A), so this is a convenience
-    layer over that, never a replacement for it.
+    layer over that, never a replacement for it. **Also on crossing:** `_swaption_from_convention`
+    (the per-currency swaption constructor), deferred from the `options/swaption.py` retire
+    (v0.131.0) — the same `from_convention` deferral already carried by the ZCB, bond, OIS and FRA
+    retires, so it lands once for all of them, not per product.
   - **the arb-free-SABR slice** — **on crossing:** `options/vol_arbitrage_scanner.py` retires with it
     (`scan_surface`, `enforce_no_arb`, butterfly + calendar violation detection). Its live consumer
-    `options/vol_calibration.py::VolSurface.arb_report` re-points then.
+    `options/vol_calibration.py::VolSurface.arb_report` re-points then. **Also on crossing:** the surface-level
+    arbitrage checks `check_calendar_arbitrage` / `check_butterfly_arbitrage` / `validate_vol_surface`,
+    deferred from the `options/vol_surface.py` retire (v0.131.0). ng has **no** arb machinery at all,
+    so these are a real capability rather than shed debt — they are the surface-level half of the same
+    block the scanner needs, and they should arrive together rather than twice.
+  - **the credit-desk / CDS quote-conversion slice** (a NEW destination row, created by the
+    `credit/cds_market.py` retire, v0.131.0) — **on crossing:** build the ISDA upfront leg —
+    `spread_to_upfront`, `upfront_to_spread`, `bootstrap_from_upfronts` — plus the desk analytics
+    `pricing_ladder` (a bump-ladder of marks) and `roll_pnl`. ng has no upfront concept at all, so
+    this is a genuine capability, not shed debt. **Shares a trigger with `NG-DEFER-CREDITISDA`**
+    (`OPEN.md`): both wait on a citable ISDA Standard CDS Model worked example, so the ledger item
+    closes with this slice rather than separately.
   - **the general vol-surface topic** (or whichever of equity / FX arrives first) — **on crossing:**
     `options/vol_smile.py` and `options/vol_surface_strike.py` retire together — an interpolating
     strike-smile container and the per-expiry surface built on it. Consumers today:
