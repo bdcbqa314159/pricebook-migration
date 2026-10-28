@@ -20,13 +20,30 @@ from dataclasses import dataclass
 from pricebook.foundation import Currency, DayCountConvention, RateIndex, Schedule
 
 
+def _check_notionals(notionals: tuple[float, ...] | None, schedule: Schedule) -> None:
+    """A notional schedule is meaningless unless it lines up with the accrual periods it weights,
+    and a silent misalignment would price a real trade wrong (the weighting would slide by a
+    period). Refused at construction — a trust boundary, so fail fast and loud."""
+    if notionals is not None and len(notionals) != len(schedule.periods):
+        raise ValueError(
+            f"notionals has {len(notionals)} entries for {len(schedule.periods)} accrual periods"
+        )
+
+
 @dataclass(frozen=True)
 class FixedLeg:
-    """A fixed leg: its accrual `schedule`, `day_count`, and fixed `rate`."""
+    """A fixed leg: its accrual `schedule`, `day_count`, fixed `rate`, and an optional per-period
+    `notionals` schedule. `None` is the constant-notional case — the overwhelmingly common one —
+    and means "the swap's scalar notional at every period", so the flat swap is the degenerate
+    schedule rather than a separate product (no `VariableNotionalSwap`, no engine type-switch)."""
 
     schedule: Schedule
     day_count: DayCountConvention
     rate: float
+    notionals: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        _check_notionals(self.notionals, self.schedule)
 
 
 @dataclass(frozen=True)
@@ -38,6 +55,10 @@ class FloatLeg:
     schedule: Schedule
     day_count: DayCountConvention
     index: RateIndex
+    notionals: tuple[float, ...] | None = None
+
+    def __post_init__(self) -> None:
+        _check_notionals(self.notionals, self.schedule)
 
 
 @dataclass(frozen=True)
@@ -52,6 +73,25 @@ class VanillaSwap:
     fixed_leg: FixedLeg
     float_leg: FloatLeg
     collateral: Currency | None = None
+
+    # ── the two readers the desks consume (`desks/api_desk`, `desks/swap_desk`). Description,
+    #    not pricing — they report the contract's own notional profile and compute no PV, so
+    #    they sit on the product without breaking "products do not price themselves" (§2).
+    def notional_schedule(self) -> tuple[float, ...]:
+        """The per-period notional of the FIXED leg — the amortisation profile. A constant-notional
+        swap reports its scalar at every period, so callers never branch on which kind they hold."""
+        if self.fixed_leg.notionals is not None:
+            return self.fixed_leg.notionals
+        return (self.notional,) * len(self.fixed_leg.schedule.periods)
+
+    def average_notional(self) -> float:
+        """The ARITHMETIC mean of the notional schedule — the quarry's definition
+        (`fixed_income/swap.py::average_notional`, "arithmetic mean of the notional schedule"),
+        carried unchanged so a crossing desk reports the same number. Note it is deliberately
+        NOT time- or annuity-weighted: with uneven periods those differ, and matching the
+        quarry's stated convention is what the retire needs."""
+        sched = self.notional_schedule()
+        return sum(sched) / len(sched)
 
 
 @dataclass(frozen=True)
