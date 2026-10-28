@@ -234,3 +234,39 @@ Clause 3 exists because this sweep needed it. Clause 2 exists because this sweep
 
 **26 → 29 / 793.** No tick is applied in this slice; the rows are proposals and the tracker is
 unchanged until Cowork rules.
+
+---
+
+## COWORK RULING — 2026-10-27 23:44 (three ticks APPROVED, 26 → 29 / 793)
+
+Spot-checked §8 per §4; all three classifications hold, every omission resolved
+`dead`/`deferred→named`/`superseded` with evidence, residuals empty.
+
+- **`options/vol_surface` — TICK.** FlatVol → `Surface`/`flat_surface`/`SurfaceBump`; `VolTermStructure`
+  genuinely superseded (`Surface` is a term structure — the Part-1 misfile is corrected);
+  `VolSurfaceArbitrageResult` `dead` (0/0); arb checks `deferred→` arb-free-SABR (live consumer named).
+- **`options/swaption` — TICK.** Product/pricer superseded; the SABR-HW blender is `dead` **by design**,
+  not just unconsumed — porting it would re-introduce the 381bp defect v0.129.0 made unwritable (it
+  needs the deleted `HullWhite.swaption_vol`), and its uncited `blend_half_life=5.0` fails the
+  green-oracle gate regardless. `pv_ctx` architecturally superseded; `_swaption_from_convention`
+  `deferred→` conventions.
+- **`credit/cds_market` — TICK.** `build_cds_curve` → `bootstrap_survival_curve`; upfront↔spread +
+  `pricing_ladder`/`roll_pnl` `deferred→` the credit-desk/quote-conversion slice (shares the
+  `NG-DEFER-CREDITISDA` trigger); `reprice_spreads`/`mark_to_market` superseded; `LadderRung` `dead`.
+
+**Count correction ratified** — Code's reconciliation to the exact 26 found a fourth already-deletable
+module (`options/sabr`, in the partials) and `curves/bootstrap` that my spot-check missed; net-new is
+**3 TICK + 3 PARTIAL**, and Part 1's unasserted 7-module netting list was itself a floor-rule violation,
+now fixed by clause 3. The three §4 clauses (test-only, false-positive guard, net-against-deletable) are
+ratified as landed.
+
+**On landing:** write the three tracker rows carrying this ruling, and the forward-links on their
+destination rows — arb checks → the arb-free-SABR row; upfront↔spread + ladder/roll → the
+credit-desk/quote-conversion row (+ `NG-DEFER-CREDITISDA`); `_swaption_from_convention` → the
+conventions row. Drawdown **26 → 29 / 793**.
+
+**Partials:** `fixed_income/swap` first (widest consumer base). Its gap (variable notional +
+`weighted_annuity`) is a **build-and-tick** — ng building variable notional supersedes the consumed
+surface and ticks swap.py without waiting on the desks. `floating_leg` and `cds` **wait on their
+(un-crossed) consumers**, not a near-term build. I scope the variable-notional slice when the tick
+slice lands.
