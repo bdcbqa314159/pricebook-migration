@@ -11,6 +11,40 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.131.0] - 2026-10-28
+
+### Migration
+- **Drawdown 26 → 29 / 793 — three ticks, ruled by Cowork (thread 0050).** The first drawdown
+  movement since the B7 cluster opened, and the first produced by **measurement rather than by a
+  build**: all three modules' production consumed surfaces were already superseded by shipped ng
+  code. They were invisible to feature-diffing because each module is mostly code nothing imports.
+  - **`options/vol_surface.py`** — consumed surface is `FlatVol` *only* (6 live importers; methods
+    `vol`, `bumped`) → ng `Surface` + `flat_surface` + `Surface.bumped` + `risk/bump.SurfaceBump`.
+    `VolTermStructure` is **superseded, not shed** — ng's `Surface` *is* a term structure (total
+    variance linear in `T`). Arbitrage checks → `deferred→` arb-free-SABR;
+    `VolSurfaceArbitrageResult` → `dead` (0 source, 0 test).
+  - **`options/swaption.py`** — `Swaption` + `SwaptionType`, three desks, methods `price`, `greeks`,
+    `annuity`, `forward_swap_rate` → ng `Swaption`/`OptionType` + `price_swaption` +
+    `rpv01`/`forward` + `risk/greeks`. Supersedes the C2 slice-2 partial. The SABR-HW blender is
+    **`dead` by design, not merely unconsumed**: it needs `HullWhite.swaption_vol`, deleted in
+    v0.129.0 because reconstructing an underlying for it was wrong by 381bp — porting it would
+    re-introduce the defect that slice made unwritable. Its `deferred→SABR slice` link was stale.
+  - **`credit/cds_market.py`** — `build_cds_curve` *only* (3 live importers) → ng
+    `bootstrap_survival_curve`. ISDA upfront leg + desk ladders → `deferred→` a **new** credit-desk /
+    quote-conversion destination row, which shares `NG-DEFER-CREDITISDA`'s trigger.
+- **Forward-links written on the destination rows, not the retired entries** (§4): arb checks onto
+  the arb-free-SABR row; `_swaption_from_convention` onto the conventions row beside the existing
+  ZCB/bond/OIS/FRA `from_convention` deferrals; a **new** credit-desk / CDS quote-conversion row for
+  the upfront family.
+- **First application of the three §4 clauses landed in v0.130.0.** The AST importer graph supplied
+  the consumed names (grep misses multi-line parenthesised imports); attribute-level walks supplied
+  the methods actually called; every bare-name hit was re-resolved to its defining module — `cs01`
+  155 hits and `roll_pnl` 32, **all** other modules' own definitions, **all** resolving to zero
+  against the candidates; and the pool was netted against the reconciled deletable set before
+  counting.
+- Cowork's `spec_consumer_narrow_sweep.md` and `rulings_consumer_narrow_sweep.md` were untracked —
+  committed here so the ruling that authorised these ticks is in the record alongside them.
+
 ## [0.130.0] - 2026-10-27
 
 ### Changed
