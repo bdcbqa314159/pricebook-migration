@@ -11,7 +11,7 @@ Cross-asset by design: `Currency`/`Unit` open registries · `Tenor` · `Frequenc
 Delivery` · `RateIndex` (full RFR set, carrying its own calendar) · `rate_basis` · settlement ·
 `Underlying` protocol · scipy-backed numerics adapters.
 
-**Drawdown: 29 / 793.** (Single source: `handoffs/quarry_reconciliation.md`, per CLAUDE.md §4.
+**Drawdown: 30 / 793.** (Single source: `handoffs/quarry_reconciliation.md`, per CLAUDE.md §4.
 The historical `/768` is the same universe minus the 25 package markers — a superseded convention.)
 
 ---

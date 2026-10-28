@@ -41,9 +41,13 @@ of two); ≤5 fields. **No `isinstance` in the engine** — the variable-N swap 
 `weighted_annuity` composition, flat or not; that is the whole point of the atom.
 
 ## 4. Oracle
-1. **Byte-identical (load-bearing):** every existing constant-notional swap prices unchanged — via
-   `weighted_annuity(flat) ≡ N·rpv01`. The existing `VanillaSwap` oracles stay green; assert the
-   identity to 1e-12 directly.
+1. **Within tolerance (load-bearing) — NOT bit-identical. [Cowork correction 2026-10-28.]** My first
+   wording made *both* "one `weighted_annuity` composition, flat or not" and "byte-identical constant-N
+   swaps" load-bearing; they conflict — `Σ(Nᵢ·τᵢ·df) ≠ N·Σ(τᵢ·df)` in floating point (re-association).
+   The single composition is §3d-correct and wins; a flat-only bit-preserving path would re-derive the
+   annuity (the smell §3d forbids). The requirement is **`weighted_annuity(flat) ≡ N·rpv01` to 1e-12**
+   (§7c: tolerance is the hard rule; byte-identity is scoped to same-process statelessness, which is
+   unaffected). Expect last-digit re-association on some existing swaps (~machine-eps); no test moves.
 2. **Strip decomposition (structural, §6 — not a scalar):** an amortising swap **equals a strip of
    constant-notional vanilla swaps** with the step notionals (Nᵢ−Nᵢ₊₁ on tenor-i swaps, or the
    equivalent nested decomposition) — assert the variable-N PV equals the sum of that strip, each leg
