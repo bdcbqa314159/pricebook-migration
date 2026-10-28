@@ -19,7 +19,7 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 29 / 793** — **all 29 are TICKED; none is physically moved**
+**Deletable (the §4 drawdown bar): 30 / 793** — **all 30 are TICKED; none is physically moved**
 (park-model amendment, 2026-10-26: a park is a tracker/MANIFEST state, not a `git mv` — CLAUDE.md §4,
 doc 13 §7, ruling `rulings_quarry_park_model.md`). The 19 formerly physically parked at the Topic-0
 (v0.74.0) and Topic-1 (v0.98.0) closes have been **restored to their original quarry paths**: those
@@ -556,6 +556,40 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   **all** resolving to zero against the candidates. The pool was netted against the reconciled
   deletable set before counting — the step whose absence made the sweep's first pass report 6 ticks
   where the honest yield is 3.
+
+- **Variable-notional swap retire read (+1 TICK — `fixed_income/swap.py` DELETABLE, 29 → 30 / 793;
+  Cowork-ruled 2026-10-28, thread 0054).** A **build-and-tick**: the consumed surface was superseded
+  *except* variable notional, so building that one capability ticked the module **without waiting on
+  the desks**. Consumed surface is `InterestRateSwap` + `SwapDirection` across **10 live importers**
+  (`desks/api`, `desks/api_desk`, `desks/swap_desk`, `desks/swaption_desk`, `equity/rich_cheap`,
+  `fixed_income/curve_trading`, `fixed_income/zc_swap`, `options/midcurve_swaption`,
+  `options/swaption`, `structured/cms`); the methods they actually call are `pv`, `par_rate`,
+  `annuity`, `dv01`, `cashflow_schedule`, `notional_schedule`, `average_notional`, `pv_ctx`.
+  **Superseded:** `pv` → `engine/linear.price_swap`; `annuity` → `rpv01`/`weighted_annuity`;
+  `dv01` → `risk/greeks.ir_delta` + `shell/portfolio.book_dv01`; `cashflow_schedule` →
+  `foundation/schedule` + `Leg`; `pv_ctx` → the engine's `price(instrument, model)` (no `ctx`);
+  **`notional_schedule`/`average_notional` → built this slice** on `VanillaSwap`, with
+  `average_notional` carrying the quarry's **arithmetic-mean** definition verbatim so a crossing
+  desk reports the same number. `shed:`
+  - **`dead` — `amortising`, `accreting`, `roller_coaster`** (the variable-notional *constructor*
+    sugar). The **asymmetry is the point**: the readers are consumed, the constructors are not.
+    Evidence under §4's **resolved-name clause**, which earned its keep here: bare-name counts are
+    24 / 2 / 0 in source and 25 / 12 / 2 in tests, and **0 of those resolve to `swap.py`** — every
+    hit is another module's own `amortising`/`accreting`. Under the pre-clause protocol this would
+    have read as a live residual and blocked the tick.
+  - **`deferred→conventions` — `from_convention` AND `create_swap`.** `create_swap` is classified
+    under the **test-only clause** (thread 0054): its only resolving consumer is
+    `quarry/tests/test_convention_factory.py` (itself already deletable), so it is not production
+    — but it is **not `dead` either**, because it is the same capability as `from_convention` in
+    free-function form (build a swap from currency-defaulted conventions). It travels on the
+    conventions row with its sibling rather than being written off.
+  - **`deferred→par_rate`'s first crossing consumer** — see the dedicated row below.
+  **Residual empty.** Note the correction to the ruling's premise: **9 of the 10 `par_rate`
+  consumers are un-crossed, not all 10** — `options/swaption.py` ticked at v0.131.0. It does not
+  change the verdict (ng's swaption derives its forward swap rate from its own atoms and never
+  wants the quarry's `par_rate`), but the row says 9, not 10.
+  Evidence: `spec_variable_notional_swap.md` + `tests/L4/test_variable_notional_swap.py` +
+  `CHANGELOG` v0.132.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -589,7 +623,9 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     layer over that, never a replacement for it. **Also on crossing:** `_swaption_from_convention`
     (the per-currency swaption constructor), deferred from the `options/swaption.py` retire
     (v0.131.0) — the same `from_convention` deferral already carried by the ZCB, bond, OIS and FRA
-    retires, so it lands once for all of them, not per product.
+    retires, so it lands once for all of them, not per product. **Also on crossing:** `fixed_income/swap.py`'s
+    `from_convention` *and* `create_swap` (the same capability as a free function), deferred from
+    the variable-notional retire (v0.132.0).
   - **the arb-free-SABR slice** — **on crossing:** `options/vol_arbitrage_scanner.py` retires with it
     (`scan_surface`, `enforce_no_arb`, butterfly + calendar violation detection). Its live consumer
     `options/vol_calibration.py::VolSurface.arb_report` re-points then. **Also on crossing:** the surface-level
@@ -597,6 +633,18 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     deferred from the `options/vol_surface.py` retire (v0.131.0). ng has **no** arb machinery at all,
     so these are a real capability rather than shed debt — they are the surface-level half of the same
     block the scanner needs, and they should arrive together rather than twice.
+  - **the first ng consumer that wants a swap's `par_rate`** (a NEW destination row, created by the
+    `fixed_income/swap.py` retire, v0.132.0) — **on crossing:** expose `par_rate` as a shared
+    building block. It is **trivially exposable**: ng already computes it as
+    `(df₀ − dfₙ)/rpv01` in `calibration/calibrate.py::_par_rate`, private to the calibrator. It is
+    deferred rather than built now only because publishing it today would be a public API with
+    **one** consumer (§6b rule of two) — and §4 names *swap's `par_rate`* as its canonical example
+    of a deferrable **capability**, which never blocks a tick. **The named consumers to re-point**
+    (9 un-crossed, 15 calls): `desks/api`, `desks/api_desk`, `desks/swap_desk` (×2),
+    `desks/swaption_desk`, `equity/rich_cheap` (×2), `fixed_income/curve_trading`,
+    `fixed_income/zc_swap`, `options/midcurve_swaption`, `structured/cms` (×4). The tenth,
+    `options/swaption.py`, is already crossed and does not want it — ng's swaption derives the
+    forward swap rate from its own atoms.
   - **the credit-desk / CDS quote-conversion slice** (a NEW destination row, created by the
     `credit/cds_market.py` retire, v0.131.0) — **on crossing:** build the ISDA upfront leg —
     `spread_to_upfront`, `upfront_to_spread`, `bootstrap_from_upfronts` — plus the desk analytics
