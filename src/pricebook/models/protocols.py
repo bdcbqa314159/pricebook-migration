@@ -26,6 +26,7 @@ from datetime import date
 from typing import Protocol, runtime_checkable
 
 from pricebook.foundation import RateIndex, Tenor
+from pricebook.foundation.equity import EquityUnderlying
 from pricebook.market.snapshot import MarketSnapshot
 from pricebook.products.option import OptionType
 from pricebook.products.swap import VanillaSwap
@@ -95,6 +96,18 @@ class SwaptionPrice(CalibratedModel, Protocol):
     are already chosen."""
 
     def swaption_price(self, swap: VanillaSwap, expiry: date, kind: OptionType) -> float: ...
+
+
+@runtime_checkable
+class EquityVol(CalibratedModel, Protocol):
+    """The equity-volatility capability — a sibling of `ImpliedVol`, keyed by `EquityUnderlying`
+    instead of `RateIndex`. Same shape, different asset dimension: a new asset class adds a key,
+    and here a capability keyed by it, never a field on an existing one (§3c).
+
+    `strike` is threaded for the smile axis that arrives with its consumer; a flat/term `Surface`
+    ignores it today, exactly as `ImpliedVol` ignores `forward`."""
+
+    def equity_vol(self, underlying: EquityUnderlying, expiry: date, strike: float) -> float: ...
 
 
 @runtime_checkable

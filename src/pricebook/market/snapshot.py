@@ -21,9 +21,10 @@ from datetime import date
 from typing import Mapping
 
 from pricebook.foundation import Currency, CurrencyPair, FixingHistory, FixingSource, fx_pair
+from pricebook.foundation.equity import EquityUnderlying
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.curve_set import CurveSet
-from pricebook.market.vol_surface import SabrSurface, Surface, SurfaceKey, SwaptionSurfaceKey
+from pricebook.market.vol_surface import EquitySurfaceKey, SabrSurface, Surface, SurfaceKey, SwaptionSurfaceKey
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,34 @@ class RecoveryKey:
 
 
 @dataclass(frozen=True)
+class EquitySpotKey:
+    """A key into `scalars` for an equity's **spot price**. A sibling of `ScalarKey`/`RecoveryKey`:
+    the equity asset class adds **keys, not fields** (§3c), so `scalars` gains a key type and the
+    snapshot's shape is unchanged."""
+
+    underlying: EquityUnderlying
+
+
+@dataclass(frozen=True)
+class DividendYieldKey:
+    """A key into `scalars` for an equity's **continuous dividend yield** `q`.
+
+    Its own key rather than a field on `EquitySpotKey`, because spot and dividend yield are two
+    independently-bumped market numbers: `bump_spot` must move one without the other, and a
+    combined key would make a dividend bump indistinguishable from a spot bump at the snapshot.
+    Flat `q` for now — a dividend *curve* and discrete dividends arrive with their consumer."""
+
+    underlying: EquityUnderlying
+
+
+#: Every key type the `scalars` shape accepts. Named, because this union grows by one entry per
+#: asset class (keys, not fields — §3c) and a `Mapping` key is INVARIANT: without the alias every
+#: producer of a scalars dict has to restate the full union, and each new asset class breaks them
+#: all at once. Widen here; producers annotate with the alias.
+ScalarKeyType = ScalarKey | RecoveryKey | EquitySpotKey | DividendYieldKey
+
+
+@dataclass(frozen=True)
 class MarketSnapshot:
     """The market state a model was calibrated to (A1). `valuation_date` is 'today';
     `curves` is the keyed `CurveSet`; `scalars` holds FX spots (and future single-number
@@ -56,8 +85,8 @@ class MarketSnapshot:
 
     valuation_date: date
     curves: CurveSet
-    scalars: Mapping[ScalarKey | RecoveryKey, float] = field(default_factory=dict)
-    surfaces: Mapping[SurfaceKey | SwaptionSurfaceKey, Surface | SabrSurface] = field(default_factory=dict)
+    scalars: Mapping[ScalarKeyType, float] = field(default_factory=dict)
+    surfaces: Mapping[SurfaceKey | SwaptionSurfaceKey | EquitySurfaceKey, Surface | SabrSurface] = field(default_factory=dict)
     fixings: FixingSource = field(default_factory=lambda: FixingHistory({}))  # the "series" shape (doc 19 §2)
 
     def __post_init__(self) -> None:

@@ -21,6 +21,7 @@ from pricebook.market.curve import DiscountCurve
 from pricebook.market.curve_set import CurveKey, CurveRole, CurveSet
 from pricebook.market.snapshot import DividendYieldKey, EquitySpotKey, MarketSnapshot
 from pricebook.market.vol_surface import EquitySurfaceKey, Surface
+from pricebook.models.black import vol_time_measure
 from pricebook.models.black_model import BlackModel
 from pricebook.products.equity import EquityOption
 from pricebook.products.option import OptionType
@@ -33,10 +34,11 @@ EXPIRY = VAL + timedelta(days=T_DAYS)
 
 
 def _market(spot: float = 100.0, vol: float = 0.20, r: float = 0.05, q: float = 0.0) -> MarketSnapshot:
+    tm = vol_time_measure(VAL)
     curve = DiscountCurve(
-        valuation_date=VAL, times=(0.0, 10.0), zero_rates=(r, r), day_count=DC
+        time_measure=tm, times=(0.0, 10.0), dfs=(1.0, math.exp(-r * 10.0))
     )
-    curves = CurveSet({CurveKey(Currency.USD, CurveRole.DISCOUNT, None): curve})
+    curves = CurveSet({CurveKey(CurveRole.DISCOUNT, Currency.USD, None): curve})
     return MarketSnapshot(
         valuation_date=VAL,
         curves=curves,

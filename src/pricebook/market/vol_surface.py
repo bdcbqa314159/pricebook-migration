@@ -22,6 +22,7 @@ from datetime import date
 
 from enum import Enum
 
+from pricebook.foundation.equity import EquityUnderlying
 from pricebook.foundation import Interpolation, RateIndex, Tenor, TimeMeasure, interpolate
 
 
@@ -52,6 +53,15 @@ class SwaptionSurfaceKey:
 
     index: RateIndex
     swap_tenor: Tenor
+
+
+@dataclass(frozen=True)
+class EquitySurfaceKey:
+    """A key into `surfaces` for an equity's vol, beside `SurfaceKey`/`SwaptionSurfaceKey` — the
+    same keys-not-fields move (§3c). Strike-smile arrives with its consumer; a flat/term
+    `Surface` is what slice 1 marks."""
+
+    underlying: EquityUnderlying
 
 
 @dataclass(frozen=True)
