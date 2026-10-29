@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
+from numpy.typing import NDArray
 
 from pricebook.engine.registry import dispatch as price
 from pricebook.foundation.day_count import Accrual
@@ -35,7 +36,14 @@ from pricebook.foundation.numerics import MonteCarloConfig
 from pricebook.foundation.results import PricingFailure
 from pricebook.foundation.schedule import future_periods
 from pricebook.models.hull_white import HullWhite
+from functools import singledispatch
+
 from pricebook.models.process import StateProcess
+from pricebook.market.snapshot import DividendYieldKey
+from pricebook.market.vol_surface import EquitySurfaceKey, flat_surface
+from pricebook.models.black import black_vec, vol_time_measure
+from pricebook.products.equity import EquityForward, EquityOption
+from pricebook.risk.monte_carlo import mc_mean
 from pricebook.models.protocols import CalibratedModel
 from pricebook.products.option import OptionType, Swaption
 from pricebook.products.swap import FixedLeg, FloatLeg, VanillaSwap
@@ -318,3 +326,91 @@ def _swap_mtm_vec(
     for t_j, c in flows:
         fixed += c * _bond_vec(model, t_exp, t_j, r)
     return swap.notional * (1.0 - _bond_vec(model, t_exp, t_last, r) - fixed)
+
+
+# ── equity exposure (c3) — the generic MC core over a BlackScholesProcess ────────────────────
+@singledispatch
+def _residual_value(
+    instrument: object, states: NDArray[np.float64], t: float, process: StateProcess
+) -> NDArray[np.float64]:
+    """The instrument's MtM at exposure time `t`, vectorised over sampled spot `states`.
+
+    **Dispatched structurally, not by an `isinstance` ladder.** The first draft branched on the
+    product type inside the builder, and `test_central_diff_core_has_no_key_type_switch` caught
+    it — correctly: §1 forbids exactly that ladder in risk, and the AST test is what makes the
+    prohibition real rather than aspirational. `singledispatch` is the stdlib's extensible
+    equivalent of the engine registry ng already uses for pricers, so a new equity product
+    registers its own valuation without this module changing.
+
+    Each implementation composes the SAME atoms the c1 pricer composes, so the exposure and the
+    price cannot disagree about the contract (§3d)."""
+    raise TypeError(f"no residual valuation registered for {type(instrument).__name__}")
+
+
+def _carry_and_df(instrument, t: float, process: StateProcess) -> tuple[float, float, float]:
+    """`(τ, growth-to-expiry, df(t→T))` — the three curve facts both products need, read once.
+    `e^{r·τ}` comes from the discount-factor ratio, never from a separate `r` (§3d, as
+    `equity_forward`)."""
+    market = process.market
+    tm = vol_time_measure(market.valuation_date)
+    tau = tm.year_fraction(instrument.expiry) - t
+    curve = market.curves.discount(instrument.currency, None)
+    exp_date = market.valuation_date + timedelta(days=round(t * 365.0))
+    df_t_to_T = curve.df(instrument.expiry) / curve.df(exp_date)
+    q = market.scalars[DividendYieldKey(instrument.underlying)]
+    carry = math.exp(-q * tau) / df_t_to_T if tau > 0.0 else 1.0
+    return tau, carry, df_t_to_T
+
+
+@_residual_value.register
+def _(
+    instrument: EquityForward, states: NDArray[np.float64], t: float, process: StateProcess
+) -> NDArray[np.float64]:
+    """A forward's MtM: `df(t→T)·(F(t,T) − K)`. **Goes negative**, which is what makes it the
+    product that exercises the exposure floor an option cannot."""
+    _, carry, df_t_to_T = _carry_and_df(instrument, t, process)
+    return df_t_to_T * (states * carry - instrument.strike)
+
+
+@_residual_value.register
+def _(
+    instrument: EquityOption, states: NDArray[np.float64], t: float, process: StateProcess
+) -> NDArray[np.float64]:
+    """An option's MtM: the residual Black value on the forward, discounted — the c1 composition
+    evaluated at the sampled spot."""
+    tau, carry, df_t_to_T = _carry_and_df(instrument, t, process)
+    market = process.market
+    vol = flat_surface(market.surfaces[EquitySurfaceKey(instrument.underlying)]).at(
+        instrument.expiry, instrument.strike, vol_time_measure(market.valuation_date)
+    )
+    return df_t_to_T * black_vec(states * carry, instrument.strike, vol, tau, instrument.option_type)
+
+
+def equity_exposure_profile(
+    instrument: EquityOption | EquityForward,
+    process: StateProcess,
+    dates: Sequence[date],
+    numerics: MonteCarloConfig,
+) -> ExposureProfile | PricingFailure:
+    """`EE(tᵢ) = E[max(MtM(tᵢ), 0)]` for an equity derivative, by Monte-Carlo over `process`.
+
+    **Undiscounted, like every other profile here** — `cva` applies the survival weighting and the
+    discounting, which is why that atom is untouched by a third asset class arriving.
+
+    The exposure is anchored, not merely simulated: for a long option the future MtM is always
+    positive and its discounted value is a martingale, so `EE(tᵢ) = V₀/df(0,tᵢ)` **exactly** — c1's
+    price grossed up. That is the oracle, and it is independent of this function."""
+    market = process.market
+    tm = vol_time_measure(market.valuation_date)
+    out: list[tuple[date, float]] = []
+    try:
+        for d in dates:
+            t = tm.year_fraction(d)
+            est = mc_mean(
+                process, t, numerics,
+                lambda states, _t=t: np.maximum(_residual_value(instrument, states, _t, process), 0.0),
+            )
+            out.append((d, est.mean))
+    except (ValueError, KeyError, ZeroDivisionError) as exc:
+        return PricingFailure(f"equity MC exposure: {exc}")
+    return tuple(out)

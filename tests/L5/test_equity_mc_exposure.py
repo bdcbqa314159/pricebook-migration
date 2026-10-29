@@ -171,3 +171,22 @@ def test_seed_reproducibility_is_byte_identical() -> None:
     assert a == b  # invariant 1
     c = equity_exposure_profile(_option(), _process(), DATES, MonteCarloConfig(paths=5_000, seed=4))
     assert a != c
+
+
+def test_black_vec_IS_black_elementwise() -> None:
+    """The identity that keeps two call shapes from becoming two formulas (§3d). `black_vec`
+    exists only because 200k scalar `black` calls per date took this file from sub-second to 59s
+    — the second instance of the per-path-loop mistake `NG-WATCH-CLOCK` was ledgered for. Having
+    a vector twin is fine; having an *unbound* one is how they drift."""
+    import numpy as np
+
+    from pricebook.models.black import black, black_vec
+
+    forwards = np.array([40.0, 80.0, 99.999, 100.0, 100.001, 150.0, 400.0])
+    for strike in (50.0, 100.0, 200.0):
+        for vol in (0.0, 0.05, 0.25, 1.5):
+            for t in (0.0, 0.25, 3.0):
+                for kind in (OptionType.CALL, OptionType.PUT):
+                    got = black_vec(forwards, strike, vol, t, kind)
+                    want = [black(float(f), strike, vol, t, kind) for f in forwards]
+                    assert np.allclose(got, want, rtol=0.0, atol=0.0), (strike, vol, t, kind)

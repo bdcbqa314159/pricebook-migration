@@ -38,3 +38,19 @@ class EquityOption:
     expiry: date
     option_type: OptionType
     currency: Currency = Currency.USD
+
+
+@dataclass(frozen=True)
+class EquityForward:
+    """A European equity forward: pay `strike` at `expiry`, receive one unit of `underlying`.
+
+    Built here because the exposure slice needs a product whose **MtM goes negative** — a long
+    option's never does, so `max(V, 0)` is a no-op on it and an exposure builder that dropped the
+    floor entirely would pass every option test. The forward is the smallest product that
+    exercises the floor, and its own exposure has a closed form (the positive part of a forward
+    IS a call), so it is an oracle rather than scaffolding."""
+
+    underlying: EquityUnderlying
+    strike: float
+    expiry: date
+    currency: Currency = Currency.USD
