@@ -19,7 +19,7 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 30 / 793** — **all 30 are TICKED; none is physically moved**
+**Deletable (the §4 drawdown bar): 31 / 793** — **all 31 are TICKED; none is physically moved**
 (park-model amendment, 2026-10-26: a park is a tracker/MANIFEST state, not a `git mv` — CLAUDE.md §4,
 doc 13 §7, ruling `rulings_quarry_park_model.md`). The 19 formerly physically parked at the Topic-0
 (v0.74.0) and Topic-1 (v0.98.0) closes have been **restored to their original quarry paths**: those
@@ -641,6 +641,28 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   consumer composes ng's four functions. It is not itself a residual once theta exists.
   Evidence: `spec_equity_greeks_scalarbump.md` + `tests/L5/test_equity_greeks.py` + `CHANGELOG`
   v0.135.0.
+
+- **Time-bump / theta retire read (+1 TICK — `options/equity_option.py` DELETABLE, 30 → 31 / 793;
+  Cowork-ruled 2026-10-29, thread 0060).** The residual the previous slice identified is closed,
+  so the module ticks. Full consumed surface and its disposition:
+  `equity_option_price` → ng `engine/equity` (c1, v0.134.0) · `equity_delta`, `equity_gamma`,
+  `equity_vega` → `risk/equity` by bump-and-reprice (v0.135.0) · **`equity_rho` → the key-blind
+  `ir_delta`, with no equity code at all** (BS rho to 1e-7) · **`equity_theta` → `risk/greeks.theta`
+  over the new `TimeBump`** (this slice) · `equity_greeks` (the bundle) → superseded as a
+  *capability*: a crossing consumer composes ng's functions, and the bundle was only packaging.
+  **Residual empty. `shed:` nothing** — unusually, every name in this module crossed, because the
+  aggregate clause forced the two that a name-level read would have missed.
+  **The capability is asset-class-general, not an equity detour:** `TimeBump` lives beside
+  `CurveIdentityBump`/`ScalarBump` and `theta` beside `ir_delta`, so every product gets a theta.
+  **Bounded, with the boundary recorded in two places rather than assumed:**
+  (a) a snapshot carrying a **SURVIVAL** curve is **refused** — `Q` is anchored too, and rolling
+  the clock while leaving it untouched would return a wrong CDS theta with no error;
+  (b) a **cashflow crossing `[t, t+Δt]`** is a documented precondition, not a guard: detecting it
+  means inspecting the instrument for its cashflow dates, the type-switch §1 forbids. That case is
+  **roll-down P&L, not theta** — `deferred→` the time/roll-down row, which now carries only the
+  coupon case. **Escalated to Cowork as the invariant-6 contract question** per the spec's §6 flag,
+  rather than answered here by picking a semantic.
+  Evidence: `spec_time_bump_theta.md` + `tests/L5/test_time_bump_theta.py` + `CHANGELOG` v0.136.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -705,10 +727,11 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `models/regime_pricing` (`equity_delta`, `equity_gamma`, `equity_vega`). Note ng takes greeks
     by **bump** (`central_diff`), not by closed form, so the quarry's analytic `equity_delta`
     formulas are content to mine, not a shape to copy (§4 mine-for-CONTENT-never-STRUCTURE).
-  - **the time / roll-down bump slice** (a NEW destination row, created by the equity-greeks
-    retire, v0.135.0) — **on crossing:** build the valuation-date bump (re-anchoring the curves —
-    roll-down, not a scalar shift) and `equity_theta` on it, which empties
-    `options/equity_option.py`'s last residual and ticks it. The quarry's own roll-down content is
+  - **the ROLL-DOWN slice (the coupon case only — the clock bump itself LANDED in v0.136.0)** —
+    **on crossing:** extend `TimeBump` to a window containing a cashflow, where invariant 6
+    re-partitions the flow from future to historical. That difference is **roll-down P&L, not
+    theta**, and it is a decomposition question, not a bump. Also add survival-curve re-anchoring
+    (refused today) so credit products get a theta. The quarry's own roll-down content is
     in `risk/pnl_explain.py::compute_rolldown` — mine it for CONTENT, not shape (§4). Note this is
     **asset-class-general**: every product has a theta, so the bump belongs beside
     `CurveIdentityBump`/`ScalarBump`, not in `risk/equity.py`.
