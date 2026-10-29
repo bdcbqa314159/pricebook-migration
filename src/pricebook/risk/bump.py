@@ -21,9 +21,9 @@ from typing import Protocol, runtime_checkable
 
 from pricebook.market.curve_set import CurveKey, CurveSet
 from pricebook.foundation.reference_entity import ReferenceEntity
-from pricebook.market.snapshot import MarketSnapshot, RecoveryKey
+from pricebook.market.snapshot import MarketSnapshot, RecoveryKey, ScalarKeyType
 from pricebook.market.survival_curve import SurvivalHandle
-from pricebook.market.vol_surface import SurfaceKey, flat_surface
+from pricebook.market.vol_surface import SurfaceKeyType, flat_surface
 
 
 @runtime_checkable
@@ -69,7 +69,7 @@ class SurfaceBump:
     """Parallel-bumps the vol surface at `key` (a flat vega): replace it with `.bumped(shift)`,
     rebuild the snapshot."""
 
-    key: SurfaceKey
+    key: SurfaceKeyType
 
     def apply(self, market: MarketSnapshot, shift: float) -> MarketSnapshot:
         # flat vega only; SABR vega (bump α/ρ/ν) is a distinct greek, deferred to its consumer
@@ -106,17 +106,34 @@ class SurvivalPillarBump:
 
 
 @dataclass(frozen=True)
-class RecoveryBump:
-    """Bumps the recovery rate of one entity in the snapshot's `scalars`.
+class ScalarBump:
+    """Bumps ONE entry of the snapshot's `scalars` shape, whatever it keys.
 
-    This is an ordinary snapshot bump precisely because slice 4 moved recovery to L1 (§3c). While it
-    lived on the L2 product there was no way to express it here — risk would have needed a second,
-    instrument-mutating bump mechanism beside this one, and a type-switch to choose between them,
-    which is what §1 forbids. One home, one mechanism."""
+    Generic over the key because `scalars` is an **open map** (doc 19 §2): FX spot, recovery,
+    equity spot, equity dividend yield — and whatever the next asset class marks. The bump does
+    not need to know which; it needs the key.
 
-    entity: ReferenceEntity
+    **Why generic now and not sooner:** recovery was the only scalar anyone bumped, so
+    `RecoveryBump` was written concrete (§6b — one caller, write it concrete). Equity spot and
+    dividend yield are the second and third, which is the rule-of-two moment, so the generic
+    arrives *with* its consumers rather than in anticipation of them. `RecoveryBump` is now a
+    constructor for this type, not a parallel implementation — one mechanism, so a change to
+    how scalars are bumped cannot reach credit and equity differently (§3d)."""
+
+    key: ScalarKeyType
 
     def apply(self, market: MarketSnapshot, shift: float) -> MarketSnapshot:
-        key = RecoveryKey(self.entity)
-        scalars = {**market.scalars, key: market.scalars[key] + shift}
+        scalars = {**market.scalars, self.key: market.scalars[self.key] + shift}
         return replace(market, scalars=scalars)
+
+    @classmethod
+    def recovery(cls, entity: ReferenceEntity) -> ScalarBump:
+        """The credit recovery bump — what `RecoveryBump` used to be, now a named constructor of
+        the one mechanism rather than a second implementation of it. Keeps the credit vocabulary
+        at the call site (`rec01` reads `ScalarBump.recovery(entity)`) without a parallel path
+        that could drift (§3d). Verified byte-identical across 27 rec01/cs01/JTD rows.
+
+        Recovery is bumpable here at all only because B6 slice 4 moved it to L1 (§3c): while it
+        lived on the L2 product, risk would have needed a second, instrument-mutating bump
+        mechanism beside this one and a type-switch to choose — which §1 forbids."""
+        return cls(RecoveryKey(entity))

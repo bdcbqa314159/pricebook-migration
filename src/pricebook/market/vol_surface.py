@@ -64,6 +64,12 @@ class EquitySurfaceKey:
     underlying: EquityUnderlying
 
 
+#: Every key type the `surfaces` shape accepts. Named for the same reason as `ScalarKeyType`:
+#: a `Mapping` key is INVARIANT and this union grows by one entry per asset class, so without the
+#: alias every producer and every bump restates the full union. Widen here.
+SurfaceKeyType = SurfaceKey | SwaptionSurfaceKey | EquitySurfaceKey
+
+
 @dataclass(frozen=True)
 class Surface:
     """A Black (lognormal) volatility surface — a TERM STRUCTURE over expiry: `vols[i]` at

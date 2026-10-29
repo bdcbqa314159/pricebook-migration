@@ -24,7 +24,7 @@ from pricebook.foundation import Currency, CurrencyPair, FixingHistory, FixingSo
 from pricebook.foundation.equity import EquityUnderlying
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.curve_set import CurveSet
-from pricebook.market.vol_surface import EquitySurfaceKey, SabrSurface, Surface, SurfaceKey, SwaptionSurfaceKey
+from pricebook.market.vol_surface import SurfaceKeyType, SabrSurface, Surface, SurfaceKey, SwaptionSurfaceKey
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,7 @@ class MarketSnapshot:
     valuation_date: date
     curves: CurveSet
     scalars: Mapping[ScalarKeyType, float] = field(default_factory=dict)
-    surfaces: Mapping[SurfaceKey | SwaptionSurfaceKey | EquitySurfaceKey, Surface | SabrSurface] = field(default_factory=dict)
+    surfaces: Mapping[SurfaceKeyType, Surface | SabrSurface] = field(default_factory=dict)
     fixings: FixingSource = field(default_factory=lambda: FixingHistory({}))  # the "series" shape (doc 19 §2)
 
     def __post_init__(self) -> None:

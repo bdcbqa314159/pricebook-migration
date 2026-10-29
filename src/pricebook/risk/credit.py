@@ -34,7 +34,7 @@ from pricebook.market.curve_set import CurveKey
 from pricebook.market.snapshot import MarketSnapshot
 from pricebook.market.survival_curve import SurvivalHandle
 from pricebook.foundation.reference_entity import ReferenceEntity
-from pricebook.risk.bump import RecoveryBump, SurvivalBump, SurvivalPillarBump
+from pricebook.risk.bump import ScalarBump, SurvivalBump, SurvivalPillarBump
 from pricebook.risk.greeks import central_diff
 from pricebook.risk.priceable import Priceable
 
@@ -94,7 +94,7 @@ def rec01(
     analytic derivative is exactly `−protection/(1−R)` and rec01 is **independent of the contract
     spread**. That independence is itself an oracle: if rec01 varied with the spread, R would be
     leaking into the annuity."""
-    out = central_diff(p, market, RecoveryBump(entity), shift)
+    out = central_diff(p, market, ScalarBump.recovery(entity), shift)
     if isinstance(out, PricingFailure):
         return out
     return out * shift
