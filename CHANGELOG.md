@@ -11,6 +11,68 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.137.0] - 2026-10-29
+
+### Added
+- **`StateProcess` (L3) — the simulatable-dynamics abstraction, introduced with BOTH consumers
+  present.** §6 flags a new cross-cutting abstraction and this is the one the whole (c) arc was
+  predicated on, so §6b's rule of two is met **at birth**: Hull-White's exact Gaussian sampler is
+  refactored onto it, and `BlackScholesProcess` is written against it.
+- **`BlackScholesProcess`** — equity spot sampled **exactly**,
+  `S_t = S₀·exp((r−q−½σ²)t + σ√t·Z)`, so MC's only error is statistical. `r` is read off the
+  discount curve as `−ln df(t)`, never as a separate parameter — the same single-source rule
+  `equity_forward` follows, so the simulated drift and the pricer's discount cannot disagree (§3d).
+- **`risk/monte_carlo.mc_mean`** — the generic MC core: sample a process, apply a vectorised value
+  function, return mean **and standard error**. It names no concrete dynamics (asserted on the
+  AST). `McEstimate` carries the stderr because an MC number without one is not a result — every
+  oracle against it must be stated in standard errors.
+- **`HullWhite.sample_state`** — the sampler **moved from L5 onto the dynamics that owns it**.
+  `risk/exposure.py` had been building it out of `model._instantaneous_forward` and `model.sigma`,
+  i.e. L5 reading the layer below through its privates; it now depends on the `StateProcess`
+  capability instead.
+
+### Oracles
+- **HW MC byte-identical across the refactor: 140 exposure points, 113 distinct, 112 non-zero.**
+- **A European equity option by MC over `BlackScholesProcess` reproduces the c1 Black-Scholes
+  closed form within 3·stderr**, at three strikes — the (c) arc's anchor doing exactly the job it
+  was built first for. This tests the whole composition (sampler → payoff → discounting) against
+  an independent closed form, which the marginal-moment tests below cannot.
+- `E[S_t] = S₀e^{(r−q)t}` (the **forward**, not the spot — dropping the `−½σ²` or the dividend
+  biases every equity MC price, and a price-level test hides it inside the option's convexity) and
+  the lognormal **variance** (a second moment, so it catches a σ used as a variance, or a missing
+  `√t`). Both checked on the drawn states directly.
+- Seeded reproducibility (invariant 1) and seed-dependence; σ→0 collapses to the deterministic
+  forward; **both dynamics satisfy one protocol** and the core references neither concrete type.
+
+### Fixed — a baseline that could not have detected anything
+- The first HW MC capture produced **40 points, all 0.0**, and its tenor axis was inert:
+  `_swap`'s first argument is the **strike**, not the tenor, so passing a tenor made every swap
+  200%-in-the-fixed-leg and floored every exposure at zero. A byte-identity baseline of identical
+  zeros compares equal under any change whatsoever.
+  **The floor rule needed sharpening and got it:** asserting the rows are *numbers* (the fix after
+  the 27 identical `PricingFailure`s) is not enough — they must be **DISCRIMINATING**. The capture
+  now asserts ≥100 points, **>50% distinct values**, and **>50% non-zero** before a diff means
+  anything. Second time in three slices that a capture of mine was vacuous; the pattern is that a
+  baseline needs a floor on its *variance*, not just on its population.
+
+### Debt
+- **`NG-DEFER-THETA-COUPON-GUARD`** (`OPEN.md`) — `theta` cannot refuse a coupon-crossing window;
+  the precondition is documented, not enforced. Ruled deferred rather than built (thread 0062): no
+  present consumer can violate it (the only theta consumer is the coupon-free equity option, so
+  the wrong call is unwritable today), and detecting it needs a signal ng does not expose, so a
+  `Priceable` cashflow capability now would be §6b-speculative. Trigger: the first coupon-product
+  theta, or the `roll_down` slice. **Cowork overturned my lean to building it now, correctly.**
+
+### Migration
+- **Retire-read — 0 TICKS, 31 / 793 unchanged, as the spec expected.** `models/gbm.py` (126L, 4
+  importers): the *content* crosses as `BlackScholesProcess`, but the consumed name does not —
+  `GBMGenerator` is a **stepped path generator** and ng's process is an **exact marginal sampler**,
+  a deliberately narrower capability. `deferred→` the joint-path / wrong-way-risk slice, which is
+  that shape's real consumer. `models/processes_extended.py` (598L, **0** importers): a library of
+  `evolve`-per-step dynamics (CIR, Heston, jump, rough) ng has none of — an un-built vertical,
+  RESIDENT. `models/mc_exposure.py` crosses at **c3**, not here.
+- `TEST_FLOOR` 553 → 560.
+
 ## [0.136.0] - 2026-10-29
 
 ### Added
