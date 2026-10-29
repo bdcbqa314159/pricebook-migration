@@ -21,6 +21,12 @@ from typing import Protocol, runtime_checkable
 
 from pricebook.market.curve_set import CurveKey, CurveSet
 from pricebook.foundation.reference_entity import ReferenceEntity
+from datetime import timedelta
+
+from typing import cast
+
+from pricebook.market.curve import CurveHandle
+from pricebook.market.curve_set import CurveRole, CurveSet
 from pricebook.market.snapshot import MarketSnapshot, RecoveryKey, ScalarKeyType
 from pricebook.market.survival_curve import SurvivalHandle
 from pricebook.market.vol_surface import SurfaceKeyType, flat_surface
@@ -137,3 +143,52 @@ class ScalarBump:
         lived on the L2 product, risk would have needed a second, instrument-mutating bump
         mechanism beside this one and a type-switch to choose — which §1 forbids."""
         return cls(RecoveryKey(entity))
+
+@dataclass(frozen=True)
+class TimeBump:
+    """Advances the MARKET'S clock: `valuation_date` moves forward and every curve is
+    **forward-started** onto the new anchor, with the market otherwise held.
+
+    **Why this and not an expiry bump.** Theta is "the same contract, one day later", so the thing
+    that moves is the market's clock, not the contract. Bumping the instrument's `expiry` would
+    mutate the product — forbidden by §1, the same rule that kept recovery off the L2 `CDS` — and
+    it also answers a different question: a shorter-dated contract priced today, which omits the
+    financing carry that accrues as the clock advances. The two differ by that carry, and
+    `test_theta_is_NOT_an_expiry_bump_the_two_differ` holds them apart.
+
+    `shift` is in **DAYS**, not years, and is taken to a whole number of them. Markets move the
+    clock in days, and a whole-day step makes the realised `Δt` exact instead of a rounded
+    year-fraction — which matters because theta divides by it.
+
+    **Bounded scope (invariant 6).** A cashflow inside `[t, t+Δt]` crosses from future to
+    historical as the clock advances, so the repriced PV legitimately drops it. The resulting
+    difference is **roll-down P&L, not theta** — a different decomposition, deferred to its first
+    coupon-product consumer. This bump does not detect that case: detecting it would mean
+    inspecting the instrument for its cashflow dates, which is exactly the type-switch §1 forbids.
+    The scope is therefore a documented precondition on the caller, not a silent assumption —
+    see `theta`."""
+
+    #: The curve roles this slice knows how to re-anchor. A `df` curve forward-starts by the
+    #: ratio identity; a SURVIVAL curve would need its own re-anchoring (`Q` is anchored too), and
+    #: leaving it untouched would hand back a wrong CDS theta with no error — so a snapshot
+    #: carrying one is REFUSED rather than half-rolled.
+    _ROLLABLE = frozenset({CurveRole.DISCOUNT, CurveRole.PROJECTION})
+
+    def apply(self, market: MarketSnapshot, shift: float) -> MarketSnapshot:
+        """Roll the clock. Branches on the key's ROLE, never on the curve's type: the role is what
+        declares the capability, and inspecting a curve to find out what it is would be the
+        type-switch §1 forbids (`CurveSet`'s own docstring makes that promise)."""
+        unrollable = {k.role for k in market.curves.curves if k.role not in self._ROLLABLE}
+        if unrollable:
+            raise ValueError(
+                f"TimeBump cannot re-anchor curve roles {sorted(r.value for r in unrollable)}; "
+                "only discount/projection curves forward-start in this slice"
+            )
+        new_date = market.valuation_date + timedelta(days=round(shift))
+        # the role guard above proves every value is a `df` curve, so this is the same
+        # narrowing `CurveSet`'s own accessors do — a cast justified by a check, not a hope.
+        rolled = {
+            key: cast("CurveHandle", curve).forward_started(new_date)
+            for key, curve in market.curves.curves.items()
+        }
+        return replace(market, valuation_date=new_date, curves=CurveSet(rolled))

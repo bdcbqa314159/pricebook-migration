@@ -11,6 +11,63 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.136.0] - 2026-10-29
+
+### Added
+- **`TimeBump` (L5) — the market's clock, not the contract's.** Advances `valuation_date` and
+  **forward-starts** every curve (`df_new(T) = df_old(T)/df_old(t+Δt)`), market otherwise held.
+  Bumping the instrument's `expiry` instead was rejected: it mutates the *product* (§1 — the rule
+  that kept recovery off the L2 `CDS`) and answers a different question (a shorter contract today,
+  missing the financing carry).
+- **`DiscountCurve.forward_started(new_anchor)`** — the curve re-anchors itself, keeping curve
+  arithmetic out of L5. Exact for the `LOG_LINEAR` default: `ln df` is piecewise linear in `t`, and
+  dividing by a constant shifts that line without bending it.
+- **`risk/greeks.theta`** — `∂PV/∂t` per year, one-sided over a **whole-day** clock advance and
+  divided by the **realised** year fraction, not the requested one. One-sided because the clock
+  cannot run backwards (a curve has no anchor before its own). Generic: `TimeBump` sits beside
+  `CurveIdentityBump`/`ScalarBump` and `theta` beside `ir_delta`, so **every product gets a
+  theta** — this is not equity machinery.
+
+### Oracles
+- **Black-Scholes closed-form theta vs the `TimeBump` finite difference**, 3 strikes × call/put.
+- **Convergence rate asserted, not just a tolerance:** the difference is `O(Δt)`, so the error
+  must fall with the step (16 → 2 days, >4× reduction). A tolerance alone cannot separate a
+  correct `O(Δt)` difference from a wrong construction that happens to land nearby.
+- The curve is forward-started, not shifted (`df_new(T) = df_old(T)/df_old(t+Δt)` checked
+  directly); the re-anchored curve implies the **same zero rate**; the base snapshot is never
+  mutated.
+
+### Fixed — a test fixture that could not have failed
+- **A FLAT curve cannot distinguish a clock advance from an expiry bump.** On a flat curve
+  `df(T)/df(Δ) = e^{−r(T−Δ)} = df(T−Δ)` — the two constructions agree **to the last bit**, so the
+  test meant to hold them apart passed whichever had been implemented. Rewritten on a **sloped**
+  curve, where they separate, with the flat-curve degeneracy asserted alongside so the reason
+  cannot rot. This is the structural-oracle rule in miniature (§6): a flat input strips flat
+  whatever the construction's shape — the same family as the cap-strip and ML-D1 findings.
+
+### Changed
+- **New `CLAUDE.md` §4 clause — "a consumed aggregate consumes its members"** (ruled, thread 0060).
+  A returned bundle's accessed members are part of the consumed surface though no importer binds
+  them; where access cannot be cheaply bounded, treat members as consumed — a wrong tick is worse
+  than a delayed one. Companion test: *can ng supply the capability when the consumer crosses?*
+  Yes ⇒ deferrable (`par_rate`); no ⇒ **needed-now**, tick blocked (`equity_theta`).
+- `CurveHandle` now declares `forward_started` — the capability is declared on the protocol rather
+  than probed on the object, the same fix pattern as `SurvivalHandle.bumped_at`.
+
+### Migration
+- **Drawdown 30 → 31 / 793 — `options/equity_option.py` ticked.** Every name in its consumed
+  surface crossed: price (c1) · delta/gamma/vega (v0.135.0) · **rho with no equity code at all**
+  (key-blind `ir_delta`, BS rho to 1e-7) · **theta** (this slice) · the `equity_greeks` bundle
+  superseded as a capability, being only packaging. **`shed:` nothing** — unusually, and only
+  because the aggregate clause forced the two names a name-level read would have missed.
+- **Boundaries recorded, not assumed.** A snapshot carrying a **survival** curve is **refused**
+  (`Q` is anchored too; rolling the clock and leaving it untouched would return a wrong CDS theta
+  with no error). A **cashflow crossing the window** is a documented precondition rather than a
+  guard — detecting it means inspecting the instrument's cashflow dates, the type-switch §1
+  forbids — and that case is **roll-down P&L, not theta**. The invariant-6 contract question is
+  **escalated to Cowork** per the spec's §6 flag, not answered here.
+- `TEST_FLOOR` 545 → 553.
+
 ## [0.135.0] - 2026-10-28
 
 ### Added

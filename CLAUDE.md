@@ -363,6 +363,17 @@ the whole spine, and a sibling to §1's no-`isinstance` law.
   own population: reconcile the deletable list to the tracker's stated count *before* classifying.
   *(Precedent: the consumer-narrow sweep reported 6 TICK-now and 4 PARTIAL-cheap; 4 of those 10 were
   already deletable — netting gave the honest 3 and 3.)*
+- **A consumed aggregate consumes its members** (ruled 2026-10-29; ruling
+  `docs/handoffs/spec_time_bump_theta.md` §1). When a module returns an aggregate — a greeks
+  record, a result bundle — that a consumer passes onward, the member fields reached through it
+  are part of the **consumed surface** even though no importer binds them by name. Follow returned
+  aggregates to their accessed members; where a bundle is returned onward and member access cannot
+  be cheaply bounded, **treat its members as consumed** — a wrong tick is worse than a delayed one.
+  The companion test is *"can ng supply the capability when the consumer crosses?"*: yes ⇒
+  deferrable (swap's `par_rate`), no ⇒ **needed-now**, and the tick is blocked.
+  *(Precedent: `equity_theta` — 0 direct binds, but `equity_greeks`'s two consumers return the
+  whole bundle onward, so `.theta` is consumed; ng could not provide it, so a name-level read
+  would have ticked `options/equity_option.py` and deleted a capability its consumers use.)*
 - **Forward-link every `deferred→X`.** The obligation is written on **X's row** in
   `quarry_reconciliation.md` ("on crossing: add …"), not only on the retired module's entry — the
   retired entry is never re-read; X's row is read the moment X is picked up.
