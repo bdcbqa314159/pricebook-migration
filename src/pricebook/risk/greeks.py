@@ -21,7 +21,7 @@ from pricebook.foundation import PricingFailure
 from pricebook.market.curve_set import CurveKey
 from pricebook.market.snapshot import MarketSnapshot
 from pricebook.market.vol_surface import SurfaceKey
-from pricebook.risk.bump import Bump, CurveBasisBump, CurveIdentityBump, SurfaceBump
+from pricebook.risk.bump import Bump, CurveBasisBump, CurveIdentityBump, SurfaceBump, TimeBump
 from pricebook.risk.priceable import Priceable
 
 
@@ -65,3 +65,32 @@ def vol_vega(
 ) -> float | PricingFailure:
     """Parallel volatility vega `∂PV/∂σ` for the surface at `key` (per vol point = this · 0.01)."""
     return central_diff(p, market, SurfaceBump(key), shift)
+
+def theta(p: Priceable, market: MarketSnapshot, days: float = 1.0) -> float | PricingFailure:
+    """`∂PV/∂t` per YEAR, from a one-sided forward difference over a whole-day clock advance:
+    `(PV(t+Δt) − PV(t))/Δt`, with `Δt` the REALISED year fraction rather than the requested one.
+
+    One-sided, not central, because the clock cannot run backwards: forward-starting a curve to a
+    date before its own anchor is undefined. That costs an order — the error is `O(Δt)` rather
+    than `O(Δt²)` — which is why the oracle asserts the CONVERGENCE RATE as well as a tolerance:
+    a tolerance alone cannot tell a correct `O(Δt)` difference from a wrong construction that
+    happens to land nearby.
+
+    **Precondition the caller owns:** no cashflow inside `[t, t+Δt]`. If one crosses, invariant 6
+    re-partitions it from future to historical and the repriced PV legitimately drops it — the
+    difference is then **roll-down P&L, not theta**. This function does not detect that: detecting
+    it would mean inspecting the instrument for its cashflow dates, the type-switch §1 forbids.
+    Deferred to the first coupon-product consumer, with roll-down as its own decomposition."""
+    bump = TimeBump()
+    try:
+        rolled = bump.apply(market, days)
+        now = p.price_at(market)
+        later = p.price_at(rolled)
+    except (KeyError, ValueError) as exc:
+        return PricingFailure(f"theta could not advance the clock: {exc}")
+    if isinstance(now, PricingFailure):
+        return now
+    if isinstance(later, PricingFailure):
+        return later
+    realised = (rolled.valuation_date - market.valuation_date).days / 365.0
+    return (later.pv.amount - now.pv.amount) / realised

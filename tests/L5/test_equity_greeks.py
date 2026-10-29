@@ -159,17 +159,17 @@ def test_rho_needs_NO_equity_code_the_existing_ir_delta_already_gives_it() -> No
     assert got == pytest.approx(100.0 * T * math.exp(-R * T) * norm.cdf(d2), rel=1e-7)
 
 
-def test_THETA_is_absent_and_that_is_the_residual_blocking_the_tick() -> None:
-    """Recorded as a test so the gap cannot be forgotten between slices.
+def test_THETA_NOW_EXISTS_and_the_residual_that_blocked_the_tick_is_CLOSED() -> None:
+    """The inversion of the previous slice's placeholder, which asserted theta was **absent** and
+    held the gap open until it closed. The residual that blocked `options/equity_option.py` is
+    gone: theta is a `TimeBump` away, on generic machinery (`risk/greeks.theta`), not an
+    equity-specific formula — every product has a theta.
 
-    `equity_theta` is transitively consumed (both `equity_greeks` callers return the whole bundle
-    to *their* callers), and ng cannot express it today: theta is a derivative in **time**, which
-    is neither a scalar nor a curve bump. Advancing the valuation date re-anchors every curve, so
-    a `TimeBump` is roll-down machinery, not a one-liner — and bumping the option's *expiry*
-    instead is forbidden, because that mutates the instrument rather than the market (§1, the
-    same rule that kept recovery off the L2 product).
-    """
-    import pricebook.risk.equity as eq
+    Kept rather than deleted, because the pair is the record that the gap was found, named, and
+    then actually closed, instead of quietly dropping off a list."""
+    from pricebook.risk.bump import TimeBump
+    from pricebook.risk.greeks import theta
 
-    assert not hasattr(eq, "equity_theta")
-    assert not any("Time" in n for n in dir(__import__("pricebook.risk.bump", fromlist=["x"])))
+    assert TimeBump is not None
+    got = theta(_p(_opt()), _market())
+    assert isinstance(got, float) and got < 0.0  # a long option decays

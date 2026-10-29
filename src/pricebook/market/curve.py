@@ -45,6 +45,8 @@ class CurveHandle(Protocol):
 
     def bumped(self, shift: float) -> CurveHandle: ...
 
+    def forward_started(self, new_anchor: date) -> CurveHandle: ...
+
     @property
     def time_measure(self) -> TimeMeasure: ...
 
@@ -88,6 +90,29 @@ class DiscountCurve:
             for i in range(1, len(self.times))
         )
         return monotone_convex(self.times, averages)
+
+    def forward_started(self, new_anchor: date) -> DiscountCurve:
+        """The same market, re-anchored at `new_anchor`: `df_new(T) = df_old(T)/df_old(new_anchor)`.
+
+        This is what "hold the market and advance the clock" means for a curve, and it is NOT a
+        rate shift — the implied zero rates are unchanged, only the point they are measured from
+        moves. Used by `TimeBump` for theta; a parallel shift would measure rate sensitivity
+        instead and get theta wrong by the whole financing carry.
+
+        Exact for the LOG_LINEAR default: `ln df` is piecewise linear in `t`, and dividing by a
+        constant shifts that line without bending it, so the re-anchored curve reproduces every
+        surviving pillar ratio exactly rather than re-interpolating them."""
+        dt = self.time_measure.year_fraction(new_anchor)
+        if dt < 0.0:
+            raise ValueError("cannot forward-start a curve to a date before its own anchor")
+        base = self.df(new_anchor)
+        kept = [(t - dt, df / base) for t, df in zip(self.times, self.dfs) if t > dt]
+        return DiscountCurve(
+            TimeMeasure(new_anchor, self.time_measure.day_count),
+            (0.0, *(t for t, _ in kept)),
+            (1.0, *(df for _, df in kept)),
+            self.interpolation,
+        )
 
     @classmethod
     def flat(cls, time_measure: TimeMeasure, rate: float, until: date) -> DiscountCurve:
