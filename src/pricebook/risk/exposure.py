@@ -35,6 +35,7 @@ from pricebook.foundation.numerics import MonteCarloConfig
 from pricebook.foundation.results import PricingFailure
 from pricebook.foundation.schedule import future_periods
 from pricebook.models.hull_white import HullWhite
+from pricebook.models.process import StateProcess
 from pricebook.models.protocols import CalibratedModel
 from pricebook.products.option import OptionType, Swaption
 from pricebook.products.swap import FixedLeg, FloatLeg, VanillaSwap
@@ -232,18 +233,15 @@ def _remaining_fixed_flows(
     return flows
 
 
-def _simulate_short_rate(model: HullWhite, t: float, numerics: MonteCarloConfig):
-    """`r(t)` under the `t`-forward measure: Gaussian, mean `f(0,t)`, variance
-    `σ²(1 − e^{−2at})/(2a)`. Exact — see `mc_exposure_profile` for why the mean is the forward.
+def _simulate_short_rate(model: StateProcess, t: float, numerics: MonteCarloConfig):
+    """The state at `t`, through the `StateProcess` capability (c2).
 
-    Seeded per call *and per date* from the config's seed, so the profile is reproducible
-    byte-identically (invariant 1) while different dates do not share draws."""
-    mean = model._instantaneous_forward(t)
-    if model.sigma == 0.0 or t <= 0.0:
-        return np.full(numerics.paths, mean)
-    var = model.sigma**2 * (1.0 - math.exp(-2.0 * model.a * t)) / (2.0 * model.a)
-    rng = np.random.default_rng((numerics.seed, round(t * 1_000_000)))
-    return rng.normal(mean, math.sqrt(var), numerics.paths)
+    This used to BE the sampler, built here out of `model._instantaneous_forward` and
+    `model.sigma` — L5 reading the layer below through its privates. The sampler moved onto the
+    dynamics that owns it, so this is now a one-line delegation kept for the call sites' sake,
+    and `mc_exposure_profile` no longer knows HW's internals. Byte-identical: the arithmetic and
+    the seeding moved unchanged."""
+    return model.sample_state(t, numerics)
 
 
 def _bond_vec(model: HullWhite, t: float, maturity: float, r):

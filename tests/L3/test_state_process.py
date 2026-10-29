@@ -144,12 +144,26 @@ def test_a_european_equity_option_by_MC_reproduces_c1s_CLOSED_FORM() -> None:
 
 
 def test_the_generic_core_names_NEITHER_concrete_process() -> None:
-    """The abstraction is structural: `mc_mean` must not mention `HullWhite` or
-    `BlackScholesProcess`, or it is a switch rather than a protocol (§1)."""
+    """The abstraction is structural: the core must not IMPORT or REFERENCE a concrete dynamics,
+    or it is a switch wearing a protocol's clothes (§1).
+
+    Checked on the AST, not the source text: the module legitimately *names* its consumers in its
+    provenance header and docstrings, and a word-grep would flag that prose — the same false
+    positive the debt gate hits on a comment mentioning a suppression, and the same one this
+    repo already fixed once on the word "reconstruct"."""
+    import ast
     import inspect
 
     import pricebook.risk.monte_carlo as core
 
-    src = inspect.getsource(core)
-    assert "HullWhite" not in src
-    assert "BlackScholesProcess" not in src
+    tree = ast.parse(inspect.getsource(core))
+    imported = {
+        a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names
+    }
+    referenced = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {
+        n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
+    }
+    for concrete in ("HullWhite", "BlackScholesProcess"):
+        assert concrete not in imported, concrete
+        assert concrete not in referenced, concrete
+    assert "StateProcess" in imported  # it depends on the CAPABILITY, and must
