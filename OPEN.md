@@ -36,6 +36,17 @@ but not a *tier* emptying while another grows (L0 losing 20 tests while L4 gains
 **Re-open trigger:** the first tier rebalance, or a slice that moves tests between layers — at which
 point the floor becomes a per-tier mapping.
 
+**NG-DEFER-THETA-COUPON-GUARD — `theta` cannot refuse a coupon-crossing window.** `TimeBump`
+advances the market's clock; if a cashflow falls inside `[t, t+Δt]`, invariant 6 re-partitions it
+from future to historical and the repriced PV legitimately drops it — so the difference is
+**roll-down P&L, not theta**. The precondition is documented on `theta`, not enforced. Ruled
+deferred rather than built (Cowork, thread 0062) on two grounds: **no present consumer can violate
+it** (the only theta consumer is the coupon-free equity option, so the wrong call is unwritable
+today), and detecting it needs a signal ng does not expose — `PricingResult` is pv/accrued/basis —
+so a `Priceable` cashflow capability now would be §6b-speculative for one not-yet-present consumer.
+**Re-open trigger:** the first coupon-product theta, or the `roll_down` slice — whichever comes
+first builds the guard §1-clean, justified then by two consumers (the guard and `roll_down`).
+
 **NG-WATCH-CLOCK — test wall-clock is ungated.** `TEST_FLOOR` holds the test *count*; nothing holds
 the *time*. The MC exposure profile's first draft ran 73s for one file (per-path `bond()` calls)
 before vectorisation took it to 0.45s — caught by eye, not by a gate. One instance, so §6's

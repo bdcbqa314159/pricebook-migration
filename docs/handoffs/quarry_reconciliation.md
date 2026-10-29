@@ -663,6 +663,22 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   coupon case. **Escalated to Cowork as the invariant-6 contract question** per the spec's §6 flag,
   rather than answered here by picking a semantic.
   Evidence: `spec_time_bump_theta.md` + `tests/L5/test_time_bump_theta.py` + `CHANGELOG` v0.136.0.
+
+- **c2 `StateProcess` retire read (0 TICKS — as the spec expected; 31 / 793 unchanged):** the two
+  quarry process modules were read against the new abstraction.
+  **`quarry/pricebook/models/gbm.py`** (126L, 4 live importers, consumed surface `GBMGenerator`):
+  the *content* — exact lognormal sampling — crosses as `BlackScholesProcess`, but the consumed
+  name does not. `GBMGenerator` is a **path generator** (a stepped grid over many dates); ng's
+  process is an **exact marginal sampler**, which is a deliberately narrower capability (§6b: a
+  joint-path shape arrives with wrong-way risk, its real consumer). So the four importers' surface
+  is **not** superseded → `deferred→` the joint-path/WWR slice, not a tick.
+  **`quarry/pricebook/models/processes_extended.py`** (598L, 0 importers): a library of `evolve`-
+  per-step processes (CIR, Heston, jump, rough). Nothing in ng consumes any of it and ng has none
+  of those dynamics — an **un-built vertical**, RESIDENT by §4 (a product/dynamics ng never built
+  blocks the tick).
+  **No tick, and none was projected:** c2 is the abstraction plus its two implementors;
+  `models/mc_exposure.py` crosses at **c3**, where the generic MC *exposure* lands.
+  Evidence: `spec_c2_stateprocess.md` + `tests/L3/test_state_process.py` + `CHANGELOG` v0.137.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
