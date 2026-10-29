@@ -17,6 +17,9 @@ Provenance:
 from __future__ import annotations
 
 import math
+
+import numpy as np
+from scipy.stats import norm
 from datetime import date
 
 from pricebook.foundation import DayCountConvention, TimeMeasure, norm_cdf, norm_pdf
@@ -43,6 +46,36 @@ def black(forward: float, strike: float, vol: float, t: float, option_type: Opti
     if call:
         return forward * norm_cdf(d1) - strike * norm_cdf(d2)
     return strike * norm_cdf(-d2) - forward * norm_cdf(-d1)
+
+
+def black_vec(forward, strike: float, vol: float, t: float, option_type: OptionType):
+    """`black` over an ARRAY of forwards — the same closed form at a different call shape.
+
+    The in-tree precedent is `_bond_vec` (§3d: "one formula, two call shapes"). What keeps two
+    shapes from becoming two formulas is not discipline but a **tested identity**:
+    `test_black_vec_IS_black_elementwise` asserts they agree to the last bit across strikes, vols
+    and both types — the same way `weighted_annuity(flat N) ≡ N·rpv01` binds the annuity pair.
+
+    It exists because MC needs it: calling the scalar `black` once per path put 200k Python-level
+    calls inside the equity exposure builder and took one test file from sub-second to **59
+    seconds** — the second instance of the per-path-loop mistake that `NG-WATCH-CLOCK` was
+    ledgered for (the first cost 73s in the rates MC draft)."""
+    f = np.asarray(forward, dtype=float)
+    call = option_type is OptionType.CALL
+    intrinsic = np.maximum(f - strike, 0.0) if call else np.maximum(strike - f, 0.0)
+    if vol <= 0.0 or t <= 0.0 or strike <= 0.0:
+        return intrinsic
+    s = vol * math.sqrt(t)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d1 = (np.log(f / strike) + 0.5 * s * s) / s
+        d2 = d1 - s
+        priced = (
+            f * norm.cdf(d1) - strike * norm.cdf(d2)
+            if call
+            else strike * norm.cdf(-d2) - f * norm.cdf(-d1)
+        )
+    # a non-positive forward has no lognormal; fall back to intrinsic there, matching `black`
+    return np.where(f > 0.0, priced, intrinsic)
 
 
 def black_vega(forward: float, strike: float, vol: float, t: float) -> float:

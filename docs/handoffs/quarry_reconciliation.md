@@ -679,6 +679,38 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   **No tick, and none was projected:** c2 is the abstraction plus its two implementors;
   `models/mc_exposure.py` crosses at **c3**, where the generic MC *exposure* lands.
   Evidence: `spec_c2_stateprocess.md` + `tests/L3/test_state_process.py` + `CHANGELOG` v0.137.0.
+
+- **c3 equity-MC-exposure retire read (0 TICKS — 31 / 793 unchanged. The tick was the slice's
+  stated BAR-MOVER and it does NOT happen; this is thread-0042's call under test, and the test
+  overturns it):** `quarry/pricebook/models/mc_exposure.py` (163L, **1** live importer,
+  `models/mc_instrument_adapters.py`, consuming `ExposureEngine`).
+  Thread 0042 read the consumed surface as *"a generic process framework over a
+  `BlackScholesProcess`, not rates netting"*, and recorded *"`ExposureResult` had 0 consumers
+  anywhere"*. The first half is right. **The second half is wrong**, and the §4 **aggregate
+  clause** (landed v0.136.0) is what catches it: the importer's call is
+  `ExposureEngine(...).compute().to_dict()` — `to_dict()` passes the **whole** `ExposureResult`
+  onward, so every field is consumed. That is the clause overturning an earlier assessment two
+  slices after being ratified.
+  **Two independent blockers, both measured not assumed:**
+  1. **Joint paths.** `ExposureEngine.compute` builds `MCEngine(process, time_grid, …).paths` — a
+     `(n_paths, n_steps+1)` matrix — and its `revalue(paths, step)` callback indexes it by step.
+     ng's `StateProcess` is an **exact marginal sampler** by deliberate c2 design; the joint shape
+     is wrong-way risk's, already `deferred→` the WWR slice. So the framework ng now has is the
+     right *kind* and the wrong *shape* for this consumer.
+  2. **The XVA aggregate.** `ExposureResult` carries `epe`, **`ene`**, **`pfe_95`**, **`pfe_99`**,
+     **`ee_peak`**, **`effective_epe`**, `cva`, **`dva`**, **`fva`** — and `to_dict()` consumes
+     all of them. ng has the EE profile and `cva`; it has **none** of the bolded seven. ng also
+     deliberately **splits** profile from atom where the quarry bundles CVA/DVA/FVA inside the
+     engine, so this is partly shed-by-design and partly genuine residual.
+  **What ng DID build here** (the slice is not empty): the equity exposure builder over the c2
+  generic engine, anchored by a martingale identity (`EE(tᵢ) = V₀/df(0,tᵢ)` — agreement 2.0e-3 to
+  8.5e-3 relative across four dates), equity CVA through the **unchanged** `cva` atom (0.3763 at
+  R=40%, 0.5018 at R=20%, hazard 2%), and `EquityForward` as the product whose MtM goes negative
+  so the exposure floor is actually exercised.
+  `deferred→` the WWR / joint-path slice for (1); the ENE/PFE/DVA/FVA surface `deferred→` an
+  **XVA-reporting** slice, newly named below, for (2).
+  Evidence: `spec_c3_equity_mc_exposure.md` + `tests/L5/test_equity_mc_exposure.py` + `CHANGELOG`
+  v0.138.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -743,6 +775,14 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `models/regime_pricing` (`equity_delta`, `equity_gamma`, `equity_vega`). Note ng takes greeks
     by **bump** (`central_diff`), not by closed form, so the quarry's analytic `equity_delta`
     formulas are content to mine, not a shape to copy (§4 mine-for-CONTENT-never-STRUCTURE).
+  - **the XVA-REPORTING slice** (a NEW destination row, created by the c3 retire-read, v0.138.0) —
+    **on crossing:** build the exposure *report* surface ng lacks — **ENE**, **PFE percentiles**
+    (95/99), **peak EE**, **effective EPE**, and **DVA/FVA** — which `models/mc_exposure.py`'s one
+    importer consumes wholesale via `ExposureResult.to_dict()`. Note the percentiles and ENE need
+    only the **marginals** ng already samples, so they do not wait on the joint-path widening; the
+    `to_dict` contract does mean the whole set must land together before that module ticks. ng
+    splits profile from atom deliberately, so the quarry's engine-internal CVA/DVA/FVA bundling is
+    shed — the *quantities* are the residual, not the shape.
   - **the ROLL-DOWN slice (the coupon case only — the clock bump itself LANDED in v0.136.0)** —
     **on crossing:** extend `TimeBump` to a window containing a cashflow, where invariant 6
     re-partitions the flow from future to historical. That difference is **roll-down P&L, not

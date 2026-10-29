@@ -11,6 +11,72 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.138.0] - 2026-10-29
+
+### Added
+- **Equity MC exposure → equity CVA (c3)**, through the c2 generic engine over
+  `BlackScholesProcess`. The profile stays `(date, EE)` and **`cva` is untouched** — the
+  profile/atom split now holds across a *third* asset's exposure, asserted by the standing
+  signature gate.
+- **`EquityForward` (L2)** — the product whose MtM **goes negative**. For a long option
+  `max(V, 0)` is a no-op, so an exposure builder that dropped the floor entirely would pass every
+  option test; the forward is the smallest product that exercises it, and its exposure has its own
+  closed form (the positive part of a forward *is* a call), so it is an oracle rather than
+  scaffolding.
+- **`black_vec`** — `black` at an array call shape, the in-tree `_bond_vec` precedent (§3d, "one
+  formula, two call shapes"), **bound to the scalar by a tested identity** (`black_vec ==
+  black` elementwise, `atol=0.0`, across 72 strike/vol/t/type combinations). Two call shapes are
+  fine; an *unbound* twin is how they drift.
+
+### Oracles
+- **`EE(tᵢ) = V₀/df(0,tᵢ)` — a martingale identity, not a second simulation.** For a long option
+  the future MtM is always positive and its discounted value is a martingale, so the exposure's
+  closed form is c1's price grossed up by a discount factor. Agreement **2.0e-3 to 8.5e-3**
+  relative across four dates (the error grows with `t`, as the variance does). c1 is again the
+  anchor, as the whole MC arc intended.
+- **The forward's own closed form** `df(t→T)·e^{(r−q)(T−t)}·black(F(0,t), K·e^{−(r−q)(T−t)}, σ, t)`
+  — composed from ng's own `black` atom, so the reference reuses the atom rather than restating it.
+- Convergence as `1/√P` (64× paths ⇒ >3× error reduction); monotone profile (a long option's EE
+  rises with the `1/df` gross-up, so any decay would mean the builder reprices at the wrong
+  expiry); seed-reproducibility byte-identical; one engine, both asset exposures, no `isinstance`.
+- **Equity CVA: 0.3763 at R=40%, 0.5018 at R=20%** (hazard 2%), through the unchanged atom.
+
+### Fixed
+- **A product `isinstance` ladder inside risk, caught by its own AST gate.** The first draft of the
+  residual valuation branched on `EquityForward` vs `EquityOption` inside the exposure builder —
+  exactly the ladder §1 forbids in risk — and `test_central_diff_core_has_no_key_type_switch`
+  failed on it. Replaced with `functools.singledispatch`, the stdlib's extensible equivalent of
+  the engine registry ng already uses, so a new equity product registers its own valuation without
+  this module changing. **The prohibition was real because a test enforced it**, not aspirational.
+- **`NG-WATCH-CLOCK`'s trigger FIRED and the cause is fixed.** The equity exposure's first draft
+  ran **59 seconds** for one test file: 200k scalar `black` calls per date, i.e. the *same*
+  per-path Python loop that cost the rates MC draft 73s. `black_vec` took it to **0.69s**. This is
+  the ledger item's second instance, so a CI wall-clock ceiling is now **proposed to Cowork**
+  rather than built unilaterally. The recurring cause is specific and worth naming: a scalar
+  closed form called inside a path loop.
+- `StateProcess` now **declares** `market` (A1) — the capability on the protocol rather than a
+  `getattr` probe, the same fix as `SurvivalHandle.bumped_at` and `CurveHandle.forward_started`.
+
+### Changed
+- **`CLAUDE.md` §4 — the floor rule's THIRD face: a baseline must assert its discriminating
+  power.** "Populated" and "discriminating" are different questions and only the second is what a
+  baseline is for; a degenerate baseline compares equal under every change. Floor-on-population
+  guards an *empty* check, floor-on-variance a *populated-but-powerless* one. Second instance, so
+  the §6 convention fired (27 identical `PricingFailure`s; 40 identical zeros).
+
+### Migration
+- **0 TICKS, 31 / 793 unchanged — the slice's stated bar-mover does NOT move, and thread-0042's
+  call is overturned by testing it.** `models/mc_exposure.py`'s importer calls
+  `ExposureEngine(...).compute().to_dict()`, so the **whole** `ExposureResult` is consumed —
+  which 0042 recorded as having "0 consumers anywhere". The §4 **aggregate clause** (landed
+  v0.136.0) is what catches it, two slices after being ratified.
+  Two independent blockers: (1) **joint paths** — `compute` builds a `(n_paths, n_steps+1)` matrix
+  and indexes it by step, while ng's sampler is marginal by deliberate c2 design (`deferred→` WWR);
+  (2) **the XVA aggregate** — `ene`, `pfe_95`, `pfe_99`, `ee_peak`, `effective_epe`, `dva`, `fva`,
+  none of which ng has (`deferred→` a **new XVA-reporting** row, noted there as *not* waiting on
+  the joint-path work since percentiles and ENE need only marginals).
+- `TEST_FLOOR` 560 → 568.
+
 ## [0.137.0] - 2026-10-29
 
 ### Added

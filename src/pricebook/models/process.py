@@ -53,6 +53,13 @@ class StateProcess(Protocol):
     of `numerics.paths` draws of the state at `t`, under `t`'s own forward measure, **exactly**
     (no discretisation bias), and reproducible from `numerics.seed` (invariant 1)."""
 
+    @property
+    def market(self) -> MarketSnapshot:
+        """The snapshot the dynamics was built on (A1) — declared on the capability rather than
+        reached with `getattr`, the same fix `SurvivalHandle.bumped_at` and
+        `CurveHandle.forward_started` made."""
+        ...
+
     def sample_state(self, t: float, numerics: MonteCarloConfig) -> NDArray[np.float64]: ...
 
 
