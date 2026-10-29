@@ -11,6 +11,64 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.135.0] - 2026-10-28
+
+### Added
+- **Generic `ScalarBump(key, …)`** (`risk/bump.py`) — bumps one entry of the snapshot's `scalars`
+  shape, whatever it keys. Generic *now* and not sooner because recovery was the only scalar
+  anyone bumped (§6b — one caller, write it concrete); equity spot and dividend yield are the
+  second and third, so the generic arrives **with** its consumers.
+- **Equity greeks** (`risk/equity.py`) — delta and gamma via `ScalarBump` on spot, vega via the
+  **existing** `SurfaceBump`, dividend rho via `ScalarBump` on the dividend yield. All by
+  bump-and-reprice through the c1 pricer, so a greek cannot drift from the price it
+  differentiates. **No closed-form greek lives in the library** — the closed forms appear only as
+  test references, which is what makes those tests an oracle rather than a restatement.
+
+### Changed
+- **`RecoveryBump` is gone; `ScalarBump.recovery(entity)` replaces it** — one mechanism, not two
+  (§3d). Verified **byte-identical** across a 27-row grid of recovery × spread × tenor for
+  `rec01`, `cs01` and `jump_to_default`: the refactor moved the home, not the arithmetic.
+- **`SurfaceKeyType` alias**, the sibling of v0.134.0's `ScalarKeyType`. A `Mapping` key is
+  invariant and both unions grow by one entry per asset class, so without the aliases every
+  producer and every bump restates the full union.
+
+### Oracles
+- **Delta vs the closed form `e^{−qT}·N(d₁)`** (and `−e^{−qT}·N(−d₁)` for puts) to 1e-6, across
+  three strikes. The reference never forms the forward, so it is not the pricer's composition
+  restated.
+- **Vega vs ng's OWN `black_vega`**, discounted — checks the *plumbing* (which surface is bumped,
+  how it is scaled) instead of re-deriving `F·φ(d₁)√t`, which would restate the formula under test.
+- **Gamma structurally**, deliberately without a tight analytic match: a second difference divides
+  by `h²` and is too noisy for 1e-6. Asserted strictly positive, **peaking nearest the FORWARD**
+  (not spot — the same trap c1's σ→0 test guards), and identical for call and put.
+- **Greek put-call parity `Δ_C − Δ_P = e^{−qT}`** — model-free, so it cross-checks the two bumps
+  against each other rather than against a formula.
+- **`rec01` byte-identical over 27 rows.** An earlier version of that capture produced 27 identical
+  `PricingFailure`s for want of an integration config and compared equal — proving nothing. It now
+  **asserts all 27 rows are floats before the diff counts**: a filter with no floor on its own
+  population is not evidence (§6), and the capture was failing its own rule.
+
+### Migration
+- **Retire-read `options/equity_option.py` — 0 TICKS, PARTIAL, 30 / 793 unchanged. The spec
+  projected 30 → 31; it does not happen, and the reason is the finding.**
+  - **`equity_rho` is superseded with NO new code**: the key-blind `ir_delta` bumps the equity
+    option's discount curve and reprices through the c1 pricer, landing on Black-Scholes rho to
+    **1e-7**. The §1/§3c payoff made concrete — equity contributed *keys*, and existing risk
+    machinery priced a sensitivity on a brand-new asset class unchanged.
+  - **`equity_theta` is the residual, and it is TRANSITIVELY consumed.** No importer binds
+    `equity_theta` directly, so a name-level reading calls it unconsumed — but `equity_greeks` is
+    consumed by two modules and **both return the whole bundle to their own callers**, so `.theta`
+    reaches real consumers through it. **A bundle transitively exposes its members and the
+    consumed-surface rule must follow it**; stopping at the bound name would have ticked a module
+    whose capability ng cannot provide.
+  - **Why ng cannot provide theta (structural, not effort):** it is a derivative in *time*, which
+    is neither a scalar nor a curve bump. Advancing the valuation date re-anchors every curve, so
+    a `TimeBump` is roll-down machinery; and bumping the option's *expiry* is forbidden, because
+    that mutates the instrument rather than the market (§1 — the rule that kept recovery off the
+    L2 product). `deferred→` a new **time / roll-down bump** destination row, noted as
+    asset-class-general (every product has a theta). Held by a live test so it cannot be forgotten.
+- `TEST_FLOOR` 536 → 545.
+
 ## [0.134.0] - 2026-10-28
 
 ### Added
