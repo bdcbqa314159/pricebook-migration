@@ -294,6 +294,18 @@ the whole spine, and a sibling to §1's no-`isinstance` law.
   of 366 tests for six slices while every report read "gates green"; `provenance`, four lines asserted
   present while 17 of 45 `quarry:` paths dangled, two wrong since the day they were written. Each
   asserted existence or greenness and no floor.)*
+- **A regression / byte-identity baseline must assert its DISCRIMINATING POWER, not merely that
+  it is populated** (ruled 2026-10-29; the floor rule's **third face**). "Is it populated" and "is
+  it discriminating" are different questions, and only the second is what a baseline is *for*: a
+  degenerate baseline (all-equal, all-zero, all-`PricingFailure`) compares equal under **every**
+  change, so "byte-identical" over it proves nothing and no amount of green reveals it. A
+  byte-identity baseline therefore asserts a **floor on its variance** — enough points, enough
+  *distinct* and non-degenerate values — before any diff counts. Floor-on-population guards an
+  *empty* check; **floor-on-variance** guards a *populated-but-powerless* one.
+  *(Precedent: 27 identical `PricingFailure`s compared "equal" over nothing — the capture lacked
+  an integration config; 40 identical zero exposures compared equal under any change — `_swap`'s
+  first argument is the strike, not the tenor, so every swap was 200%-in-the-fixed-leg. Each was a
+  baseline that could not have failed.)*
 - **Domain build order (supersedes demand-driven).** Migration proceeds **block by block in
   financial-engineering dependency order** — B0 conventions → B1 curves → B2 linear products →
   B3 curve construction → B4 models → B5 non-linear+engines → B6 credit → B7 risk/XVA →
