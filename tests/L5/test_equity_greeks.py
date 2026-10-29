@@ -123,11 +123,53 @@ def test_scalar_bump_moves_only_its_own_key() -> None:
     assert base.scalars[EquitySpotKey(ACME)] == S  # the base is never mutated
 
 
-def test_recovery_bump_is_the_SAME_mechanism_not_a_second_one() -> None:
-    """§3d: one scalar-bump mechanism. `RecoveryBump` must *be* a `ScalarBump`, not a parallel
-    implementation that happens to agree today."""
+def test_the_recovery_bump_is_the_SAME_mechanism_not_a_second_one() -> None:
+    """§3d: ONE scalar-bump mechanism. The credit recovery bump must *be* a `ScalarBump`, not a
+    parallel implementation that happens to agree today. `RecoveryBump` the separate class is
+    gone — `ScalarBump.recovery` is a named constructor of the one type, so there is nothing left
+    that could drift.
+
+    (`rec01` was captured over a 27-row grid of R × spread × tenor before and after the refactor
+    and is **byte-identical** — the refactor moved the home, not the arithmetic. The capture
+    asserts all 27 rows are floats first: an earlier version produced 27 identical
+    `PricingFailure`s for want of an integration config, which compared equal and proved nothing
+    — a filter with no floor on its own population, §6.)"""
+    import pricebook.risk.bump as bump_module
     from pricebook.foundation.reference_entity import ReferenceEntity
     from pricebook.market.snapshot import RecoveryKey
-    from pricebook.risk.bump import RecoveryBump
 
-    assert RecoveryBump(ReferenceEntity("ACME")) == ScalarBump(RecoveryKey(ReferenceEntity("ACME")))
+    acme = ReferenceEntity("ACME")
+    assert ScalarBump.recovery(acme) == ScalarBump(RecoveryKey(acme))
+    assert not hasattr(bump_module, "RecoveryBump")  # no second path left to drift
+
+
+def test_rho_needs_NO_equity_code_the_existing_ir_delta_already_gives_it() -> None:
+    """The §1/§3c payoff, asserted: equity contributed *keys*, and the key-blind risk machinery
+    priced a sensitivity on the new asset class with **no new code at all**. `ir_delta` resolves
+    the discount curve, bumps it, and reprices through the c1 pricer — and lands on the
+    Black-Scholes rho `K·T·e^{−rT}·N(d₂)` to 1e-7.
+
+    This is why equity rho is not in `risk/equity.py`: writing one would be a second path to a
+    number ng already computes (§3d)."""
+    from pricebook.risk.greeks import ir_delta
+
+    key = CurveKey(CurveRole.DISCOUNT, Currency.USD, None)
+    got = ir_delta(_p(_opt()), _market(), key)
+    d2 = _d1(100.0) - VOL * math.sqrt(T)
+    assert got == pytest.approx(100.0 * T * math.exp(-R * T) * norm.cdf(d2), rel=1e-7)
+
+
+def test_THETA_is_absent_and_that_is_the_residual_blocking_the_tick() -> None:
+    """Recorded as a test so the gap cannot be forgotten between slices.
+
+    `equity_theta` is transitively consumed (both `equity_greeks` callers return the whole bundle
+    to *their* callers), and ng cannot express it today: theta is a derivative in **time**, which
+    is neither a scalar nor a curve bump. Advancing the valuation date re-anchors every curve, so
+    a `TimeBump` is roll-down machinery, not a one-liner — and bumping the option's *expiry*
+    instead is forbidden, because that mutates the instrument rather than the market (§1, the
+    same rule that kept recovery off the L2 product).
+    """
+    import pricebook.risk.equity as eq
+
+    assert not hasattr(eq, "equity_theta")
+    assert not any("Time" in n for n in dir(__import__("pricebook.risk.bump", fromlist=["x"])))
