@@ -41,9 +41,13 @@ import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+import numpy as np
+from numpy.typing import NDArray
+
 from pricebook.foundation.day_count import DayCountConvention
 from pricebook.foundation.distributions import norm_cdf
 from pricebook.foundation.money import Currency
+from pricebook.foundation.numerics import MonteCarloConfig
 from pricebook.foundation.rate_index import RateIndex
 from pricebook.foundation.solvers import brent
 from pricebook.foundation.tenor import Tenor
@@ -91,6 +95,31 @@ class HullWhite:
     # swap, and the reconstruction was wrong by **381bp** on a semi-annual underlying. The
     # reconstruction, its S-identity guard, and the Black-vol inversion are all **deleted** — there
     # is nothing left to guess, so the defect is unwritable rather than detected.
+
+    # ── the StateProcess capability (c2) ──────────────────────────────────────────────────
+    def sample_state(self, t: float, numerics: MonteCarloConfig) -> NDArray[np.float64]:
+        """`r(t)` under the `t`-forward measure: Gaussian, mean `f(0,t)`, variance
+        `σ²(1 − e^{−2at})/(2a)`. **Exact** — no time stepping, so MC's only error is statistical.
+
+        The mean being the *instantaneous forward* is an identity, not an approximation: the
+        `α(t)` shift that fits the curve and the forward-measure drift adjustment cancel, because
+        `(1 − e^{−aT}) − (1 − e^{−2aT})/2 ≡ (1 − e^{−aT})²/2`. Dropping the drift adjustment is
+        the classic error here and would bias every exposure by `σ²B(0,t)²/2`.
+
+        **Moved here from `risk/exposure.py` in c2** — the dynamics owns its own sampler. L5 was
+        reaching into `_instantaneous_forward` and `sigma` to build it, which is the layer below
+        being read through its privates; now L5 depends on the `StateProcess` capability instead.
+        The arithmetic and the seeding are unchanged, which is why the 140-point exposure capture
+        is byte-identical across the refactor.
+
+        Seeded per call *and per date* from the config's seed, so a profile is reproducible
+        byte-identically (invariant 1) while different dates do not share draws."""
+        mean = self._instantaneous_forward(t)
+        if self.sigma == 0.0 or t <= 0.0:
+            return np.full(numerics.paths, mean)
+        var = self.sigma**2 * (1.0 - math.exp(-2.0 * self.a * t)) / (2.0 * self.a)
+        rng = np.random.default_rng((numerics.seed, round(t * 1_000_000)))
+        return rng.normal(mean, math.sqrt(var), numerics.paths)
 
     # ── the closed forms ──────────────────────────────────────────────────────────────────
     @property
