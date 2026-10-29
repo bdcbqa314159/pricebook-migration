@@ -611,6 +611,36 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   **No tick:** ng supersedes the price and not the greeks, and the greeks are most of what the
   importers use. Evidence: `spec_equity_slice1.md` + `tests/L4/test_equity_vanilla.py` +
   `CHANGELOG` v0.134.0.
+
+- **Equity greeks + `ScalarBump` retire read (0 TICKS — PARTIAL; 30 / 793 unchanged. The tick was
+  EXPECTED and does NOT happen — the reason is the useful part):**
+  `quarry/pricebook/options/equity_option.py`, re-read after the greeks slice. The spec projected
+  30 → 31 on "price (c1) + greeks (this) ⇒ residual empties". The residual does **not** empty, and
+  the consumed-surface rule is what catches it.
+  **Superseded:** `equity_option_price` (c1) · `equity_delta`, `equity_gamma`, `equity_vega` (this
+  slice, by bump-and-reprice) · **`equity_rho` — with NO new code at all**: the key-blind
+  `ir_delta` resolves the equity option's discount curve, bumps it and reprices through the c1
+  pricer, landing on Black-Scholes rho `K·T·e^{−rT}·N(d₂)` to **1e-7**. That is the §1/§3c payoff
+  made concrete — equity contributed *keys*, and the existing risk machinery priced a sensitivity
+  on a brand-new asset class unchanged. Writing an equity rho would have been a second path to a
+  number ng already computes (§3d), so there deliberately is not one.
+  **Resident residual — `equity_theta`, and it is TRANSITIVELY consumed.** `equity_theta` is not
+  bound by any importer directly, so a name-level reading says it is unconsumed. But
+  **`equity_greeks` is consumed by 2 modules (`desks/api`, `models/models`) and both RETURN THE
+  WHOLE BUNDLE to their own callers** — so `.theta` reaches real consumers through it. A bundle
+  transitively exposes its members, and the consumed-surface rule has to follow it; stopping at
+  the bound name would have ticked a module whose capability ng cannot provide.
+  **Why ng cannot provide it (structural, not effort):** theta is a derivative in **time**, which
+  is neither a scalar nor a curve bump. Advancing the valuation date re-anchors every curve, so a
+  `TimeBump` is **roll-down machinery**, not a one-liner; and bumping the option's *expiry*
+  instead is forbidden — that mutates the instrument rather than the market, the same §1 rule that
+  kept recovery off the L2 product. `deferred→` a **time/roll-down bump** slice (new destination
+  row). Recorded as a live test (`test_THETA_is_absent_and_that_is_the_residual_blocking_the_tick`)
+  so the gap cannot be forgotten between slices.
+  **`equity_greeks` (the bundle) — superseded as a capability, not as packaging:** a crossing
+  consumer composes ng's four functions. It is not itself a residual once theta exists.
+  Evidence: `spec_equity_greeks_scalarbump.md` + `tests/L5/test_equity_greeks.py` + `CHANGELOG`
+  v0.135.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -675,6 +705,13 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `models/regime_pricing` (`equity_delta`, `equity_gamma`, `equity_vega`). Note ng takes greeks
     by **bump** (`central_diff`), not by closed form, so the quarry's analytic `equity_delta`
     formulas are content to mine, not a shape to copy (§4 mine-for-CONTENT-never-STRUCTURE).
+  - **the time / roll-down bump slice** (a NEW destination row, created by the equity-greeks
+    retire, v0.135.0) — **on crossing:** build the valuation-date bump (re-anchoring the curves —
+    roll-down, not a scalar shift) and `equity_theta` on it, which empties
+    `options/equity_option.py`'s last residual and ticks it. The quarry's own roll-down content is
+    in `risk/pnl_explain.py::compute_rolldown` — mine it for CONTENT, not shape (§4). Note this is
+    **asset-class-general**: every product has a theta, so the bump belongs beside
+    `CurveIdentityBump`/`ScalarBump`, not in `risk/equity.py`.
   - **the credit-desk / CDS quote-conversion slice** (a NEW destination row, created by the
     `credit/cds_market.py` retire, v0.131.0) — **on crossing:** build the ISDA upfront leg —
     `spread_to_upfront`, `upfront_to_spread`, `bootstrap_from_upfronts` — plus the desk analytics
