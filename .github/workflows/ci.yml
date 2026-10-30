@@ -40,6 +40,10 @@ jobs:
       - run: python verify.py quarry
       - run: python verify.py version
       - run: python verify.py provenance
+      # Per-file wall-clock ceiling (CLAUDE.md 7c), promoted from NG-WATCH-CLOCK on its
+      # second instance. Runs after the fast gates so a timing failure is never the
+      # thing that hides a correctness one.
+      - run: python verify.py slow
       # Signature discipline (CLAUDE.md 3b): PLR0913 max-args=5 via ruff (docs/09).
       - run: ruff check src/pricebook
       # Static-type gate: pyright over src/pricebook (config: pyrightconfig.json). Pinned like

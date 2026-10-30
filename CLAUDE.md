@@ -527,6 +527,17 @@ empty = v1.0`, taken literally; drawdown % is the progress bar.
   glibc and the MSVC runtime, so oracles assert tolerances (closed-form `1e-12`; MC/PDE
   their convergence tol), never `==` on transcendental results. The statelessness
   byte-identical check is same-process only, not a cross-OS claim.
+- **Per-file wall-clock ceiling (CI gate, `verify.py slow`).** A single test file exceeding
+  **10 s** fails CI — the floor rule's **time analogue**: the other faces bound *what a check
+  examined*, this one bounds *what it costs to examine it*. A scalar closed form called inside a
+  path loop is `O(paths × steps)` Python calls, which twice took one file to 59–73 s against a
+  sub-second norm (the rates MC draft, then the equity exposure draft), with **nothing failing** —
+  the suite was green and merely slow, which no other gate can see. Measured headroom when landed:
+  the slowest honest file was **0.99 s** (mostly interpreter startup), so 10 s is ~10× the norm and
+  ~6× under the failures, and runner variance cannot bridge either gap. A genuinely heavy test
+  carries an explicit `# slow-test-exempt: <reason>` marker and is ledgered — **never silent** (the
+  `fields-exempt` pattern). **If the ceiling trips an existing file, exempt that file explicitly;
+  never raise the ceiling to hide it.** Promoted from `NG-WATCH-CLOCK` on its second instance.
 - **Hygiene:** `.gitattributes` normalises to LF; UTF-8 forced (`PYTHONUTF8=1`, explicit
   `encoding="utf-8"`); `pathlib` everywhere, no hardcoded separators.
 - **Tracking:** `OPEN.md`, `CHANGELOG.md`, `CLAUDE.md`, `docs/` are tracked so CI has
