@@ -22,6 +22,7 @@ from typing import Mapping
 
 from pricebook.foundation import Currency, CurrencyPair, FixingHistory, FixingSource, fx_pair
 from pricebook.foundation.equity import EquityUnderlying
+from pricebook.foundation.underlying import Underlying
 from pricebook.foundation.reference_entity import ReferenceEntity
 from pricebook.market.curve_set import CurveSet
 from pricebook.market.vol_surface import SurfaceKeyType, SabrSurface, Surface, SurfaceKey, SwaptionSurfaceKey
@@ -86,11 +87,31 @@ class FundingSpreadKey:
     currency: Currency
 
 
+@dataclass(frozen=True)
+class CorrelationKey:
+    """A key into `scalars` for the correlation between an **entity's default driver** and a
+    **market factor** — wrong-way risk's single input.
+
+    Market state, not a model parameter: risk bumps it (through the one `ScalarBump`), so §3c
+    step 2 puts it in the snapshot. Keyed by the **pair**, because correlation is irreducibly a
+    relationship between two things — a field on either one could not express it, which is the
+    clearest case yet for keys-not-fields.
+
+    One pair per key rather than a matrix: ng has one default driver and one factor per report
+    today. **A full correlation matrix arrives with its first multi-factor consumer** — keyed
+    entries compose into one, and nothing else moves."""
+
+    entity: ReferenceEntity
+    factor: Underlying
+
+
 #: Every key type the `scalars` shape accepts. Named, because this union grows by one entry per
 #: asset class (keys, not fields — §3c) and a `Mapping` key is INVARIANT: without the alias every
 #: producer of a scalars dict has to restate the full union, and each new asset class breaks them
 #: all at once. Widen here; producers annotate with the alias.
-ScalarKeyType = ScalarKey | RecoveryKey | EquitySpotKey | DividendYieldKey | FundingSpreadKey
+ScalarKeyType = (
+    ScalarKey | RecoveryKey | EquitySpotKey | DividendYieldKey | FundingSpreadKey | CorrelationKey
+)
 
 
 @dataclass(frozen=True)

@@ -114,12 +114,34 @@ class HullWhite:
 
         Seeded per call *and per date* from the config's seed, so a profile is reproducible
         byte-identically (invariant 1) while different dates do not share draws."""
+        if self.sigma == 0.0 or t <= 0.0:
+            return np.full(numerics.paths, self._instantaneous_forward(t))
+        return self.state_from_normal(t, self.normal_draws(t, numerics))
+
+    def normal_draws(self, t: float, numerics: MonteCarloConfig) -> NDArray[np.float64]:
+        """The idiosyncratic standard-normal draws for date `t`, seeded per date so a profile is
+        reproducible byte-identically (invariant 1) while dates do not share draws. Exposed so a
+        **correlated** sampler can reuse the identical stream as its own `W` — which is what makes
+        the ρ→0 case of wrong-way risk an exact identity rather than a statistical agreement."""
+        return np.random.default_rng((numerics.seed, round(t * 1_000_000))).standard_normal(
+            numerics.paths
+        )
+
+    def state_from_normal(self, t: float, z: NDArray[np.float64]) -> NDArray[np.float64]:
+        """`r(t) = f(0,t) + √(σ²(1−e^{−2at})/(2a))·z` — the transition as a pure function of its
+        driver, which is the factoring the correlated sampler composes.
+
+        **Costs ≤1.4e-17 relative against the previous `rng.normal(mean, sd)` call** (numpy's
+        `normal` does not associate identically to `mean + sd·standard_normal`), so the landed MC
+        exposure baseline shifts in its last digit. Taken deliberately: the alternative is two
+        mappings from the driver to the state, which is the atom-re-derived smell §3d forbids and
+        would make ρ→0 agreement a coincidence of two formulas instead of an identity. Same trade
+        the variable-notional slice made for `weighted_annuity` at 2.9e-17 of notional."""
         mean = self._instantaneous_forward(t)
         if self.sigma == 0.0 or t <= 0.0:
-            return np.full(numerics.paths, mean)
+            return np.full(np.shape(z), mean)
         var = self.sigma**2 * (1.0 - math.exp(-2.0 * self.a * t)) / (2.0 * self.a)
-        rng = np.random.default_rng((numerics.seed, round(t * 1_000_000)))
-        return rng.normal(mean, math.sqrt(var), numerics.paths)
+        return mean + math.sqrt(var) * z
 
     def bond_vec(
         self, t: float, maturity: float, states: NDArray[np.float64]

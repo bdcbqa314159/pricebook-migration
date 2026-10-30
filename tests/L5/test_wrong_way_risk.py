@@ -145,10 +145,16 @@ def test_rho_zero_continuity_small_rho_stays_near_the_marginal() -> None:
 
 # ── 2. sign and monotonicity — the structural claim a scalar match misses ────────────────────
 def test_WRONG_way_correlation_RAISES_cva_and_RIGHT_way_LOWERS_it() -> None:
-    """For a long forward, exposure rises with spot. Correlating the default driver so that
-    default coincides with HIGH spot is **wrong-way** (we are owed more exactly when they fail)
-    and must raise CVA; the opposite sign must lower it. A sign error here is the classic WWR
-    mistake and no magnitude check catches it."""
+    """For a long forward, exposure rises with spot. **ρ > 0 is wrong-way by construction**: the
+    default driver is signed so larger means *earlier* default, so positive ρ pairs early default
+    with high spot — we are owed more exactly when they fail — and CVA must rise. Negative ρ is
+    right-way and must lower it.
+
+    That signing is a *decision*, documented in `risk/wwr.py`, not an accident of the copula
+    parametrisation: with the driver taken as `Φ⁻¹` of the default CDF (its natural form) the sign
+    is reversed, and "ρ > 0 is wrong-way" would be a claim about the parametrisation rather than
+    about economics. The first implementation had exactly that, and these three tests are what
+    found it. A sign error here is the classic WWR mistake and no magnitude check catches it."""
     surv, rec = _survival(), 0.40
     at_zero = cva(_wwr(0.0), surv, rec)
     wrong_way = cva(_wwr(0.60), surv, rec)
@@ -203,3 +209,13 @@ def test_the_driver_factoring_keeps_the_marginal_sampler_intact() -> None:
     cfg = MonteCarloConfig(paths=1_000, seed=3)
     z = np.random.default_rng((cfg.seed, round(1.0 * 1_000_000))).standard_normal(cfg.paths)
     assert np.array_equal(p.sample_state(1.0, cfg), p.state_from_normal(1.0, z))
+
+
+def test_norm_ppf_vec_IS_norm_ppf_elementwise() -> None:
+    """The identity binding the vector inverse-CDF to the scalar one (§3d), the same guard
+    `black_vec` carries. It exists because the scalar version inside a 400k-path loop did not
+    finish inside a 120-second timeout — the third per-path-loop instance in this project."""
+    from pricebook.foundation.distributions import norm_ppf, norm_ppf_vec
+
+    xs = np.array([1e-9, 0.001, 0.1, 0.5, 0.9, 0.999, 1 - 1e-9])
+    assert np.allclose(norm_ppf_vec(xs), [norm_ppf(float(x)) for x in xs], rtol=0.0, atol=0.0)
