@@ -11,6 +11,73 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.141.0] - 2026-10-30
+
+### Fixed — a discounting bug shipped in v0.140.0, found by reading the spec's framing
+- **Exposure profiles must be discounted to today, and the equity one was not.** `cva` weights by
+  the survival increment and discounts **nothing**, so the discounting has to live in the profile.
+  Three builders did it (the rates MC multiplies by `model.bond(0,tᵢ,r₀)`; the two analytic ones
+  return a `PricingResult` PV) and the **equity** one returned the raw expectation — while its
+  docstring claimed `cva` discounted, which it never has. **Equity CVA was overstated by 5.14%**,
+  and `XvaReport` inherited the same error, so every adjustment it produced was too large.
+  Fixed in both places, with the curve now a **required** argument to `xva_report` rather than
+  defaulted — the omission is unwritable instead of invisible.
+- **Why no oracle caught it, which is the part worth keeping.** Every check was *internally*
+  consistent: the martingale oracle asserted `EE = V₀/df`, which is exactly what an undiscounted
+  profile gives, so it validated the builder against itself. **Nothing compared the builders to
+  one another, or to the convention `cva` requires.** New gate:
+  `test_every_exposure_profile_is_PV_DIMENSIONED_the_convention_cva_requires`, which checks each
+  MC builder's profile against its own samples times the discount factor, with the rates builder
+  as the control that was always right.
+- **The fix made the oracles sharper, not weaker.** A discounted long-option EE is **constant at
+  `V₀`** at every horizon (the discounted value is a martingale), and `EPE − ENE = V₀` likewise —
+  a *constant* is a stronger claim than a `1/df` curve, and it fails whether the discounting is
+  dropped, doubled, or applied at the wrong date. The flatness assertion replaced a
+  `sorted(ees)` monotonicity check that only caught one direction and passed on the bug.
+- A second tautological assertion of my own, caught while writing the gate: the rates control
+  first read `assert ee < ee / df`, true for any positive `ee`. Now compares against the samples.
+
+### Added
+- **`exposure_integral(profile, weights)` — the ONE integral every valuation adjustment is.** CVA,
+  DVA and FVA differ only in the **weight** (the counterparty's survival increment, our own, the
+  funding spread over each interval) and not at all in the sum. The quarry has three separate
+  loops for it plus a fourth for MVA; ng has one, and `cva` is **refactored onto it** with a
+  ULP-exact guard — the `rpv01` lesson applied to XVA, so they cannot diverge in the integral.
+- **`survival_weights(profile, survival)`** — the `ΔQ` increments as their own function, so CVA and
+  DVA share one definition of the weight as well as one integral. Asserted to sum to `1 − Q(tₙ)`,
+  which is what separates increments from levels.
+- **`fva(profile, funding_spread)`** — `Σ EPE·s_f·Δtᵢ` through the shared atom. Deliberately **not**
+  survival-weighted: funding is a spread paid over *time*, not a loss conditional on default.
+- **`bilateral_cva(cva, dva)` = `cva − dva`** — a pure combination of two numbers ng already had,
+  asserted to the ULP. **It can be negative**, and that is correct: a desk whose own hazard exceeds
+  the counterparty's shows a gain, because its own default extinguishes a liability. The sign flip
+  is a test, since sign conventions are where bilateral XVA goes wrong. First-to-default is **not**
+  modelled — that needs a joint survival law, `deferred→` the WWR consumer.
+- **`FundingSpreadKey` (L1)** — the funding spread as snapshot `scalars`, keys-not-fields (§3c), so
+  risk bumps it through the one `ScalarBump` mechanism. Keyed by **currency**, a deliberate
+  narrowing: funding is properly a function of the funding set, but ng has no such identity and
+  inventing one for a single consumer is §6b-speculative. Widen when a second funding set appears.
+- **ruff `SLF001` enabled** (CLAUDE.md §1) — private-member access across a class boundary. Closes
+  the gap where **twice** an L5 risk module built machinery out of an L3 model's privates
+  (`sample_state` from `_instantaneous_forward`; `_bond_vec` from `_log_a`): the import edge is
+  legal so `acyclic` and `layers` both pass, and the privacy is the violation. **Green with no
+  suppressions** — the one hit (`calendars.py`, a module-level `lru_cache` helper reading
+  `cal._rule_set`) was fixed by passing the rule set in, not by a `# noqa`.
+
+### Migration
+- **0 TICKS, 32 / 793 unchanged.** The spec expected `risk/xva.py`'s `fva` + `bilateral_cva` to
+  retire the module; the **features** crossed and the **module** does not. Verified against its 9
+  importers' consumed names: `cva`, `fva`, EPE/ENE, `total_xva_decomposition`/`TotalXVAResult` are
+  all superseded, and `simulate_exposures` is superseded-with-adaptation — but **`kva`**
+  (`regulatory/trs_capital.py`) and **`repo_gap_risk`** (`risk/repo_xva.py`) are consumed and ng
+  has neither. The needed-now test answers "no", so the module cannot go.
+  **`bilateral_cva` is not in the consumed surface at all** — nothing imports it. ng built it
+  regardless (one line, and the sign test is worth having), but it is shed debt, not a residual.
+- New **KVA/capital** destination row: `kva = Σ K(tᵢ)·hurdle·Δtᵢ·df` fits the shared atom already
+  (its weight is `hurdle·Δt`, the same shape as FVA's). That plus the repo vertical is all
+  `xva.py` waits on.
+- `TEST_FLOOR` 577 → 588.
+
 ## [0.140.0] - 2026-10-30
 
 ### Added
