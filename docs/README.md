@@ -86,6 +86,7 @@ C2 model + engine + products · C3 trade/portfolio + risk/stress. Most of C2/C3 
 | `09_verification_and_audit.md` · `10_ci_and_cross_platform.md` | `verify.py`, CI matrix, tolerance oracles |
 | `06_versioning…` · `07_branching…` · `08_handoff…` | 0.x→1.0 · branch per slice · red-before-green · handoff protocol |
 | `handoffs/quarry_reconciliation.md` | living drawdown tracker |
+| `conventions_register.md` | **living** — the cross-module conventions and what guards each (3 of 6 not cross-module guarded) |
 | `parked/topic-01-yield-curve/MANIFEST.md` | T1 file set + findings from the quarry read |
 
 ## ► ARCHIVED (`archive/` — superseded or executed; kept for history, do not act on)
