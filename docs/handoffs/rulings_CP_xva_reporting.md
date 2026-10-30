@@ -47,11 +47,18 @@ bug that already shipped, not speculative infra.
 - **Per-path scalar loop, third instance** — the clock gate catches it; "vectorise the closed form
   before the path loop" is a build habit, recorded as a default, not a new rule. Agreed.
 
-## 4. Next unit — HELD for Bernardo's scope ruling
-The honest three-instance reading is accepted: (b) 4-then-0, (c) 1, B7 1 — each run building complete,
-oracled capability while the bar barely moves, because the quarry is fat and ng is thin *by design*, so
-a vertical supersedes a minority of each file. At 4.0% after 31 slices this is scope-decision-grade
-evidence, and §4 ("drawdown reports, never steers") forbids the number from picking the next unit.
-Bernardo ruled *revisit scope/pace first*; the three next-unit options (path-dependent payoffs · heavy
-B7 vertical · B8) are recorded in `CP_xva_reporting.md` §5 and wait on that ruling. **No slice opens
-until the scope frame is ruled.**
+## 4. Next unit — scope RULED (Bernardo, 2026-10-30): full migration stands (Path 1)
+Bernardo revisited the scope/pace frame and **reaffirmed full migration unchanged** — `done = quarry
+empty = v1.0`, every module crosses, drawdown the progress bar. **No CLAUDE.md amendment: the §4/§6/§7
+stance stands exactly as written.** Recorded here so the question is not re-litigated without knowing
+it was deliberated and settled: the three-instance "next tick needs a heavy vertical" evidence was put
+in front of him in full, and the ruling is to press on with the whole migration.
+
+With the frame settled, the next unit returns to a **build-order** call (§4: the domain build order
+drives, not drawdown, not preference). Of the three options in `CP_xva_reporting.md` §5, the
+build-order-earliest unfilled position is the **B5 non-linear tail — path-dependent payoffs** (Asian /
+Bermudan / American / callable / LSM), ahead of B7's capital/repo residual and B8. It is also the most
+unblocking (the largest single un-built cluster, across every asset class) and reuses the MC machinery.
+**Ruled: path-dependent payoffs next**; first slice the **Asian option** (geometric closed-form anchor),
+scoped in `spec_asian_pathdependent.md`. The `Payoff` block (§3d's named-and-deferred `StateProcess` +
+`Payoff`) lands at its **second** consumer (Bermudan/LSM), not the Asian first slice (§6b rule of two).
