@@ -1,10 +1,18 @@
 # Signature discipline for the new tree (CLAUDE.md 3b): max 5 arguments per
 # function. Editor/dev feedback; the merge gate enforces it via `verify.py
 # signatures`. The quarry (python/) is exempt and keeps its own [tool.ruff].
-extend-exclude = ["python"]
+extend-exclude = ["python", "quarry"]
 
 [lint]
-select = ["PLR0913"]
+# PLR0913 — signature discipline (CLAUDE.md 3b).
+# SLF001 — private-member access across a class boundary (CLAUDE.md 1, ruled 2026-10-30).
+#   The gap it closes: TWICE an L5 risk module built machinery out of an L3 model's privates
+#   (`sample_state` from `_instantaneous_forward`/`sigma`; `_bond_vec` from `_log_a`). The import
+#   edge is legal, so `acyclic` and `layers` both pass — the *privacy* is the violation, and both
+#   breaches were found a slice or two late, by accident. Reusing the linter rather than writing a
+#   custom check is the 6b-minimal fix. A legitimate access takes a `# noqa: SLF001` with a reason
+#   and a ledger entry (5) — never silent.
+select = ["PLR0913", "SLF001"]
 
 [lint.pylint]
 max-args = 5
