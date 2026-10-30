@@ -739,6 +739,33 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     through `to_dict`), superseded as a *capability* by `XvaReport`.
   **Residual empty.** Evidence: `spec_c3_equity_mc_exposure.md` §3 + `rulings_CP_equity_process.md`
   + `tests/L5/test_xva_report.py` + `CHANGELOG` v0.140.0.
+
+- **FVA + BCVA retire read (0 TICKS — 32 / 793 unchanged; the spec expected `xva.py`'s `fva` +
+  `bilateral_cva` to retire, and the FEATURES did while the MODULE does not):**
+  `quarry/pricebook/risk/xva.py` (783L, **9** live importers) — verified against the importers'
+  consumed names rather than against the file, per §4.
+  **Superseded by this slice:** `cva` · **`fva`** (now composing the shared `exposure_integral`) ·
+  `expected_positive_exposure` / `expected_negative_exposure` (→ `XvaReport.epe`/`.ene`) ·
+  `total_xva_decomposition` + `TotalXVAResult` (→ `XvaReport`; the §4 aggregate clause makes all
+  of `TotalXVAResult`'s members consumed, and `XvaReport` covers them).
+  **Note `bilateral_cva` is NOT in the consumed surface at all** — nothing imports it. ng built it
+  anyway, because it is one line of composition over two numbers ng already had and the
+  sign-convention test is worth having; but it is shed debt, not a residual, and the spec's
+  expectation that retiring it would move the tick was mistaken.
+  **Genuine residual — two consumed names ng does not have:**
+  1. **`kva`** (`regulatory/trs_capital.py`) — needs a **capital/RWA profile**, which ng has no
+     concept of. Already `deferred→` its own slice by ruling (thread 0070).
+  2. **`repo_gap_risk`** (`risk/repo_xva.py`) — needs the **repo** family, an un-built vertical.
+  3. **`simulate_exposures`** (6 importers) — takes a `PricingContext` + a `time_grid` + a
+     `rate_vol` and simulates internally. ng's equivalent is `mtm_samples` + a `StateProcess`, so
+     the *capability* is superseded, but the surface is a one-call simulate-and-return that assumes
+     a rates vol parameter rather than a calibrated model. Classified **superseded-with-adaptation**
+     rather than residual: a crossing consumer re-points at `mtm_samples`, and nothing is lost.
+  **No tick:** `kva` and `repo_gap_risk` are **consumed** and ng provides neither, so the module
+  cannot go — exactly the needed-now test from the aggregate-clause ruling (*can ng supply the
+  capability when the consumer crosses?* — here, no). `deferred→` the **KVA/capital** row and the
+  **repo** vertical. `xva.py` ticks when KVA lands and repo crosses, not before.
+  Evidence: `spec_fva_bcva_slice.md` + `tests/L5/test_fva_bcva.py` + `CHANGELOG` v0.141.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -803,6 +830,12 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `models/regime_pricing` (`equity_delta`, `equity_gamma`, `equity_vega`). Note ng takes greeks
     by **bump** (`central_diff`), not by closed form, so the quarry's analytic `equity_delta`
     formulas are content to mine, not a shape to copy (§4 mine-for-CONTENT-never-STRUCTURE).
+  - **the KVA / capital slice** (a NEW destination row, created by the FVA/BCVA retire-read,
+    v0.141.0) — **on crossing:** build a **capital/RWA profile** and `kva = Σ K(tᵢ)·hurdle·Δtᵢ·df`
+    on the shared `exposure_integral` (the weight is `hurdle·Δt`, the same shape as FVA's — the
+    atom already fits). Consumer to re-point: `regulatory/trs_capital.py`. **This plus the repo
+    vertical is what `risk/xva.py` (783L, 9 importers) waits on** — every other name in its
+    consumed surface is already superseded.
   - ~~**the XVA-REPORTING slice**~~ — **DONE, v0.140.0.** `XvaReport` landed on the marginals and
     `models/mc_exposure.py` ticked (31 → 32). Kept struck through rather than deleted: the row is
     the record that the obligation was written down and then discharged.
