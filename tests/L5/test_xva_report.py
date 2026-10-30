@@ -71,6 +71,10 @@ def _survival(hazard: float) -> SurvivalCurve:
     )
 
 
+def _disc():
+    return _market().curves.discount(Currency.USD, None)
+
+
 def _terms(funding: float = 0.0) -> XvaTerms:
     return XvaTerms(
         survival=_survival(0.02), recovery=0.40,
@@ -81,12 +85,17 @@ def _terms(funding: float = 0.0) -> XvaTerms:
 def _report(instrument, funding: float = 0.0):
     m = _market()
     samples = mtm_samples(instrument, _process(m), DATES, MC)
-    return xva_report(samples, _terms(funding))
+    return xva_report(samples, _terms(funding), m.curves.discount(Currency.USD, None))
 
 
 # ── the headline identity ───────────────────────────────────────────────────────────────────
-def test_EPE_minus_ENE_IS_the_forward_value_for_a_FORWARD() -> None:
-    """`max(V,0) − max(−V,0) ≡ V`, and `E[V(tᵢ)] = V₀/df(0,tᵢ)`. Non-vacuous here because a
+def test_EPE_minus_ENE_IS_the_FORWARDS_PRICE_flat_across_dates() -> None:
+    """`max(V,0) − max(−V,0) ≡ V`, so `EPE − ENE = df(0,tᵢ)·E[V(tᵢ)] = V₀` — the forward's own
+    price, **the same at every horizon** because the discounted value is a martingale.
+
+    Profiles are discounted (the convention `cva` requires), which makes this a *constant* rather
+    than a `1/df` curve — sharper, and it fails if the discounting is dropped or doubled. The
+    earlier `V₀/df` form passed while every adjustment was 5.14% too large. Non-vacuous because a
     forward's ENE is genuinely non-zero."""
     m = _market()
     curve = m.curves.discount(Currency.USD, None)
@@ -94,7 +103,7 @@ def test_EPE_minus_ENE_IS_the_forward_value_for_a_FORWARD() -> None:
     rep = _report(EquityForward(ACME, K, EXPIRY, Currency.USD))
     for (d, epe), (d2, ene) in zip(rep.epe, rep.ene):
         assert d == d2
-        assert epe - ene == pytest.approx(v0 / curve.df(d), rel=0.02), d
+        assert epe - ene == pytest.approx(v0, rel=0.02), d
         assert ene > 0.0  # the identity would be trivial otherwise
 
 
@@ -121,9 +130,9 @@ def test_DVA_is_zero_when_we_cannot_default_and_CVA_zero_when_they_cannot() -> N
     m = _market()
     samples = mtm_samples(EquityForward(ACME, K, EXPIRY, Currency.USD), _process(m), DATES, MC)
     no_own = XvaTerms(_survival(0.02), 0.40, _survival(0.0), 0.40, 0.0)
-    assert xva_report(samples, no_own).dva == pytest.approx(0.0, abs=1e-12)
+    assert xva_report(samples, no_own, _disc()).dva == pytest.approx(0.0, abs=1e-12)
     no_cpty = XvaTerms(_survival(0.0), 0.40, _survival(0.01), 0.40, 0.0)
-    assert xva_report(samples, no_cpty).cva == pytest.approx(0.0, abs=1e-12)
+    assert xva_report(samples, no_cpty, _disc()).cva == pytest.approx(0.0, abs=1e-12)
 
 
 # ── the remaining report quantities ─────────────────────────────────────────────────────────
@@ -160,7 +169,7 @@ def test_the_reports_EPE_is_BYTE_IDENTICAL_to_the_existing_exposure_builder() ->
     m = _market()
     option = EquityOption(ACME, K, EXPIRY, OptionType.CALL, Currency.USD)
     old = equity_exposure_profile(option, _process(m), DATES, MC)
-    new = xva_report(mtm_samples(option, _process(m), DATES, MC), _terms()).epe
+    new = xva_report(mtm_samples(option, _process(m), DATES, MC), _terms(), _disc()).epe
     assert new == old
 
 

@@ -11,6 +11,8 @@ requirement, because WWR conditions on the default time; that stays deferred wit
   and the negative exposure, so this module calls `cva` with different arguments and defines no
   second formula. A test asserts the exact equality so one cannot drift from the other.
 - **CVA is `cva`**, on the EPE profile, unchanged across its fourth consumer.
+- **FVA is `fva`** (`risk/xva.py`), which composes the shared `exposure_integral`. The report had
+  its own `_fva` loop for one slice; that was a second definition of the same sum and is gone.
 
 **Where ng deliberately differs from the quarry:** the quarry approximates all three adjustments
 as `spread × Δt` (`cva += lgd·epe·s·dt`). ng uses the **survival increment** `ΔQ`, which `cva`'s
@@ -37,8 +39,9 @@ from datetime import date
 import numpy as np
 from numpy.typing import NDArray
 
+from pricebook.market.curve import CurveHandle
 from pricebook.market.survival_curve import SurvivalHandle
-from pricebook.risk.xva import ExposureProfile, cva
+from pricebook.risk.xva import ExposureProfile, cva, fva
 
 #: The percentiles a desk reports by default. Two, because one is not a profile shape and three
 #: would be guessing at a convention — 95/99 are what the quarry's consumer reads.
@@ -82,17 +85,32 @@ class XvaReport:
 def xva_report(
     samples: Sequence[tuple[date, NDArray[np.float64]]],
     terms: XvaTerms,
+    discount: CurveHandle,
     quantiles: Sequence[float] = DEFAULT_QUANTILES,
 ) -> XvaReport:
     """Every functional of the exposure distribution, from one set of per-date MtM samples.
 
     One simulation, many answers: taking the samples rather than a summary is what lets EPE, ENE,
     the percentiles and both running statistics come out of a single pass, instead of re-running
-    the model once per quantity."""
-    epe = tuple((d, float(np.mean(np.maximum(v, 0.0)))) for d, v in samples)
-    ene = tuple((d, float(np.mean(np.maximum(-v, 0.0)))) for d, v in samples)
+    the model once per quantity.
+
+    **`discount` is required, not optional.** `mtm_samples` returns the MtM *at* `tᵢ`, and `cva`
+    weights by the survival increment and discounts nothing — so the samples→profile step is where
+    the discounting has to happen, and this is that step. It shipped missing in v0.140.0, which
+    made every adjustment here (and equity CVA) 5.14% too large on the test market. Taking the
+    curve as an argument rather than defaulting it is what makes the omission unwritable."""
+    dfs = tuple(discount.df(d) for d, _ in samples)
+    epe = tuple(
+        (d, df * float(np.mean(np.maximum(v, 0.0)))) for (d, v), df in zip(samples, dfs)
+    )
+    ene = tuple(
+        (d, df * float(np.mean(np.maximum(-v, 0.0)))) for (d, v), df in zip(samples, dfs)
+    )
     pfe = {
-        q: tuple((d, float(np.percentile(v, 100.0 * q))) for d, v in samples) for q in quantiles
+        q: tuple(
+            (d, df * float(np.percentile(v, 100.0 * q))) for (d, v), df in zip(samples, dfs)
+        )
+        for q in quantiles
     }
 
     values = [e for _, e in epe]
@@ -116,21 +134,5 @@ def xva_report(
         cva=cva(epe, terms.survival, terms.recovery),
         # the SAME atom, with the own curve and the negative exposure — not a second formula
         dva=cva(ene, own, terms.own_recovery) if own is not None else 0.0,
-        fva=_fva(epe, terms.funding_spread),
+        fva=fva(epe, terms.funding_spread),
     )
-
-
-def _fva(epe: ExposureProfile, funding_spread: float) -> float:
-    """`Σ EPE(tᵢ)·s_f·Δtᵢ` — funding carried on the expected positive exposure over each interval.
-
-    Deliberately **not** survival-weighted like CVA/DVA: funding is a spread paid over *time*, not
-    a loss conditional on a default, so a `ΔQ` here would be the wrong integrand rather than a
-    more accurate one. `Δtᵢ` is measured in years from the profile's own dates, so the report
-    needs no separate clock."""
-    if not epe or funding_spread == 0.0:
-        return 0.0
-    total, prev = 0.0, epe[0][0]
-    for when, exposure in epe[1:]:
-        total += exposure * funding_spread * ((when - prev).days / 365.0)
-        prev = when
-    return total
