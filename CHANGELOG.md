@@ -11,6 +11,87 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.142.0] - 2026-10-30
+
+### Added
+- **Wrong-way risk (`risk/wwr.py`) — exposure and default correlated, through the SAME `cva`.**
+  `EE(tᵢ) = df(0,tᵢ)·E[(V(tᵢ))⁺ | default in (tᵢ₋₁, tᵢ]]`, returned as the **same `(date, EE)`
+  profile** every other builder returns.
+- **`CorrelationKey(entity, factor)` (L1)** — correlation as snapshot `scalars`, bumpable through
+  the one `ScalarBump`. The clearest keys-not-fields case yet: a correlation is irreducibly a
+  relationship between two things, so a field on either one could not express it. One pair per
+  key; a full matrix arrives with its first multi-factor consumer.
+- **`StateProcess.state_from_normal` + `.normal_draws`** — the transition as a **pure function of
+  its driver**, and the driver stream exposed. This is the factoring that makes ρ=0 an *identity*:
+  `sample_state` draws `z` and calls `state_from_normal`; the correlated sampler builds
+  `z = ρ·Z_default + √(1−ρ²)·W` and calls the **same** method, with `W` from the identical seeded
+  stream. One mapping, two ways of producing its argument.
+- **`norm_ppf_vec`** — the inverse CDF at array shape, bound to the scalar by an exact elementwise
+  identity.
+
+### The profile type did NOT change, and that is the design
+- The spec anticipated a *"conditional-exposure profile, richer than `(date, EE)`"* and flagged it
+  as a possible contract question (§6 stop). **It is not one.** Independence is exactly what makes
+  the conditional expectation equal the unconditional one, so ng's existing
+  `LGD·Σ EE(tᵢ)·ΔQ(tᵢ)` **already is** the general form — the generalization is in how `EE` is
+  computed, not in its shape. The marginal profile is the WWR profile at ρ=0, the same `cva`
+  consumes both, and there is **no second CVA and no new vocabulary type**.
+
+### Oracles
+- **ρ→0 reproduces the marginal CVA EXACTLY** — relative difference **0.00e+00**, because the
+  identical seeded `W` stream gives identical draws. Not a tolerance on a different estimator.
+  Guarded by an **AST test that no `rho` comparison is branched on**: an `if rho == 0: return
+  marginal` would make the anchor vacuous, which is this project's named defect class.
+- **Sign and monotonicity:** ρ = −0.8 → 0.01× the marginal CVA, ρ = 0 → 1.00×, ρ = +0.8 → **3.77×**,
+  monotone throughout. The conditional *profile* is checked to move with ρ too, one level below
+  CVA — checking only the aggregate would pass if the conditioning leaked in through the survival
+  weights instead.
+- Continuity near ρ=0 (so the identity is not an isolated artefact of the seeding); correlation
+  bump-consistency; seed reproducibility; out-of-range ρ refused.
+
+### Fixed
+- **The sign convention, which the three monotonicity tests found.** The default driver is now
+  signed so **larger means earlier default** (`Z_default = −Φ⁻¹(F(τ))`), which makes **ρ > 0
+  wrong-way by construction**. Taken with the driver in its natural `Φ⁻¹(F)` form the sign is
+  reversed, and "ρ > 0 is wrong-way" would be a claim about a parametrisation rather than about
+  economics. The first implementation had exactly that. A sign error here is the classic WWR
+  mistake and no magnitude check catches it.
+- **The per-path loop, a THIRD time.** The copula's first draft called the scalar `norm_ppf` once
+  per path — 400k times per date — and **did not finish inside a 120-second test timeout**. After
+  73 s (rates MC) and 59 s (equity exposure), this is instance three of one cause: a scalar closed
+  form inside a path loop. The §7c clock gate now exists for exactly this, and would have caught
+  it in CI.
+- **Two §-violations of my own, fixed rather than ledgered:** `_correlated_driver` had 7 arguments
+  (§3b: bundle, never suppress) — folded the date pair into the existing **`ProtectionWindow`**,
+  which is literally "two dates, the window a credit event may land in"; and four `# type: ignore`
+  comments, removed by typing the instrument union and `SurvivalHandle` properly.
+- **HW's sampler now composes `state_from_normal`**, costing ≤**9.11e-16** relative on 24 of the
+  140 MC baseline points (numpy's `rng.normal(mean, sd)` does not associate identically to
+  `mean + sd·standard_normal`). Taken deliberately: the alternative is two mappings from driver to
+  state, the §3d smell, and ρ→0 agreement would then be a coincidence of two formulas. Same trade
+  the variable-notional slice made at 2.9e-17.
+
+### Changed
+- **doc 11 — the powerless-check lens is the oracle audit's FIRST question:** *what makes this
+  red, and can that happen?* Plus the **cross-module convention clause** (ruled): §3d guarantees a
+  shared *atom* structurally, but a shared *convention* has no structural guarantee, so a
+  self-consistent per-module oracle is blind to a mismatch — at least one oracle must compare the
+  modules. Precedent: the 5.14% discounting bug. A third shape is recorded for the pattern: a test
+  can be powerless because its **fixture** cannot discriminate (the flat curve on which a
+  clock-advance and an expiry bump agree exactly).
+
+### Migration
+- **0 TICKS, 32 / 793 — and `gbm.py`'s forward-link was MIS-TARGETED, which is the finding.** It
+  carried `deferred→WWR` since c2, on the reasoning that `GBMGenerator` is the joint-path generator
+  and WWR needs joint paths. **WWR did not need joint paths**: conditioning analytically on the
+  default interval is exact, where bucketing simulated paths would make each interval a subsample
+  and ρ=0 would then agree only statistically. The surface splits — **`terminal` superseded** by
+  `sample_state`; **`generate` resident**, consumed by `models/lsm.py`, `options/asian.py` and
+  `options/asian_option.py`, all genuinely **path-dependent payoffs**. Corrected to
+  `deferred→` a new **path-dependent-payoff (Asian / Bermudan-LSM)** row, so the entry is not read
+  again as waiting on WWR, which is now done.
+- `TEST_FLOOR` 588 → 600.
+
 ## [0.141.0] - 2026-10-30
 
 ### Fixed — a discounting bug shipped in v0.140.0, found by reading the spec's framing
