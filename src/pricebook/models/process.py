@@ -63,6 +63,29 @@ class StateProcess(Protocol):
     def sample_state(self, t: float, numerics: MonteCarloConfig) -> NDArray[np.float64]: ...
 
 
+@runtime_checkable
+class ZeroBondStates(StateProcess, Protocol):
+    """A `StateProcess` whose state prices a zero-coupon bond — the capability a rates exposure
+    needs on top of sampling.
+
+    **Extends** `StateProcess` rather than standing beside it: pricing a bond off the state
+    presupposes sampling the state, and every consumer that wants `bond_vec` also wants
+    `sample_state` and `market`. It is still an opt-in capability —
+
+    Separate capability from the base because it is not universal: an equity spot process has no bond,
+    and folding `bond_vec` into the sampler protocol would force every dynamics to implement
+    something most of them have no meaning for. Two capabilities, opted into independently —
+    the `ImpliedVol`/`SwaptionVol` pattern (doc 22 Q1).
+
+    Declaring it is what lets the swap's MtM depend on the **capability** rather than on
+    `HullWhite`: the first draft wrote `isinstance(model, HullWhite)` and the §1 AST gate failed
+    it, correctly."""
+
+    def bond_vec(
+        self, t: float, maturity: float, states: NDArray[np.float64]
+    ) -> NDArray[np.float64]: ...
+
+
 @dataclass(frozen=True)
 class BlackScholesProcess:
     """Equity spot under Black-Scholes-Merton, sampled **exactly**:

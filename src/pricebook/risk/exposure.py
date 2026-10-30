@@ -36,9 +36,8 @@ from pricebook.foundation.numerics import MonteCarloConfig
 from pricebook.foundation.results import PricingFailure
 from pricebook.foundation.schedule import future_periods
 from pricebook.models.hull_white import HullWhite
-from functools import singledispatch
-
 from pricebook.models.process import StateProcess
+from pricebook.risk.mtm import _remaining_fixed_flows, _residual_value, _swap_mtm_vec
 from pricebook.market.snapshot import DividendYieldKey
 from pricebook.market.vol_surface import EquitySurfaceKey, flat_surface
 from pricebook.models.black import black_vec, vol_time_measure
@@ -217,28 +216,13 @@ def mc_exposure_profile(
             # per-path loop called `bond` 200k × (n+1) times and took ~70s for this file alone.
             fixed_leg = np.zeros_like(draws)
             for t_j, c in flows:
-                fixed_leg += c * _bond_vec(model, t_exp, t_j, draws)
-            value = sign * (1.0 - _bond_vec(model, t_exp, t_last, draws) - fixed_leg)
+                fixed_leg += c * model.bond_vec(t_exp, t_j, draws)
+            value = sign * (1.0 - model.bond_vec(t_exp, t_last, draws) - fixed_leg)
             discounted = model.bond(0.0, t_exp, model.r0) * float(np.mean(np.maximum(value, 0.0)))
             out.append((expiry, abs(swap.notional) * discounted))
     except (ValueError, KeyError, ZeroDivisionError) as exc:
         return PricingFailure(f"MC exposure: {exc}")
     return tuple(out)
-
-
-def _remaining_fixed_flows(
-    swap: VanillaSwap, expiry: date, model: HullWhite
-) -> list[tuple[float, float]]:
-    """The fixed leg's `(tⱼ, K·τⱼ)` still outstanding at `expiry`, each `τ` from the leg's own
-    convention — so a semi-annual or odd-day-count underlying values correctly."""
-    measure = model.market.curves.discount(model.currency).time_measure
-    flows: list[tuple[float, float]] = []
-    for p in swap.fixed_leg.schedule.periods:
-        if p.payment_date <= expiry:
-            continue
-        tau = Accrual(p.accrual_start, p.accrual_end, swap.fixed_leg.day_count).year_fraction()
-        flows.append((measure.year_fraction(p.payment_date), swap.fixed_leg.rate * tau))
-    return flows
 
 
 def _simulate_short_rate(model: StateProcess, t: float, numerics: MonteCarloConfig):
@@ -250,13 +234,6 @@ def _simulate_short_rate(model: StateProcess, t: float, numerics: MonteCarloConf
     and `mc_exposure_profile` no longer knows HW's internals. Byte-identical: the arithmetic and
     the seeding moved unchanged."""
     return model.sample_state(t, numerics)
-
-
-def _bond_vec(model: HullWhite, t: float, maturity: float, r):
-    """`P(t,T; r)` over an array of `r`. The same closed form `HullWhite.bond` evaluates for one
-    rate — `logA` and `B` are curve-and-parameter facts, independent of `r`, so they are computed
-    once per maturity and the path dimension stays in numpy (§3d: one formula, two call shapes)."""
-    return np.exp(model._log_a(t, maturity) - model.b(t, maturity) * r)
 
 
 def mc_netted_exposure_profile(
@@ -310,80 +287,6 @@ def mc_netted_exposure_profile(
     except (ValueError, KeyError, ZeroDivisionError) as exc:
         return PricingFailure(f"MC netted exposure: {exc}")
     return tuple(out)
-
-
-def _swap_mtm_vec(
-    swap: VanillaSwap, flows: list[tuple[float, float]], model: HullWhite, t_exp: float, r
-):
-    """A swap's mark at `t_exp` over an array of short rates, **signed by its notional**.
-
-    At an accrual boundary the float leg is worth par, so the fixed-payer's value per unit notional
-    is `(1 − P(t,tₙ)) − Σ K·τⱼ·P(t,tⱼ)` — the same coupon bond HW's Jamshidian decomposes, composed
-    rather than restated (§3d). The notional carries the sign, so a receiver is the payer's negative
-    and netting is plain addition."""
-    t_last = flows[-1][0]
-    fixed = np.zeros_like(r)
-    for t_j, c in flows:
-        fixed += c * _bond_vec(model, t_exp, t_j, r)
-    return swap.notional * (1.0 - _bond_vec(model, t_exp, t_last, r) - fixed)
-
-
-# ── equity exposure (c3) — the generic MC core over a BlackScholesProcess ────────────────────
-@singledispatch
-def _residual_value(
-    instrument: object, states: NDArray[np.float64], t: float, process: StateProcess
-) -> NDArray[np.float64]:
-    """The instrument's MtM at exposure time `t`, vectorised over sampled spot `states`.
-
-    **Dispatched structurally, not by an `isinstance` ladder.** The first draft branched on the
-    product type inside the builder, and `test_central_diff_core_has_no_key_type_switch` caught
-    it — correctly: §1 forbids exactly that ladder in risk, and the AST test is what makes the
-    prohibition real rather than aspirational. `singledispatch` is the stdlib's extensible
-    equivalent of the engine registry ng already uses for pricers, so a new equity product
-    registers its own valuation without this module changing.
-
-    Each implementation composes the SAME atoms the c1 pricer composes, so the exposure and the
-    price cannot disagree about the contract (§3d)."""
-    raise TypeError(f"no residual valuation registered for {type(instrument).__name__}")
-
-
-def _carry_and_df(instrument, t: float, process: StateProcess) -> tuple[float, float, float]:
-    """`(τ, growth-to-expiry, df(t→T))` — the three curve facts both products need, read once.
-    `e^{r·τ}` comes from the discount-factor ratio, never from a separate `r` (§3d, as
-    `equity_forward`)."""
-    market = process.market
-    tm = vol_time_measure(market.valuation_date)
-    tau = tm.year_fraction(instrument.expiry) - t
-    curve = market.curves.discount(instrument.currency, None)
-    exp_date = market.valuation_date + timedelta(days=round(t * 365.0))
-    df_t_to_T = curve.df(instrument.expiry) / curve.df(exp_date)
-    q = market.scalars[DividendYieldKey(instrument.underlying)]
-    carry = math.exp(-q * tau) / df_t_to_T if tau > 0.0 else 1.0
-    return tau, carry, df_t_to_T
-
-
-@_residual_value.register
-def _(
-    instrument: EquityForward, states: NDArray[np.float64], t: float, process: StateProcess
-) -> NDArray[np.float64]:
-    """A forward's MtM: `df(t→T)·(F(t,T) − K)`. **Goes negative**, which is what makes it the
-    product that exercises the exposure floor an option cannot."""
-    _, carry, df_t_to_T = _carry_and_df(instrument, t, process)
-    return df_t_to_T * (states * carry - instrument.strike)
-
-
-@_residual_value.register
-def _(
-    instrument: EquityOption, states: NDArray[np.float64], t: float, process: StateProcess
-) -> NDArray[np.float64]:
-    """An option's MtM: the residual Black value on the forward, discounted — the c1 composition
-    evaluated at the sampled spot."""
-    tau, carry, df_t_to_T = _carry_and_df(instrument, t, process)
-    market = process.market
-    vol = flat_surface(market.surfaces[EquitySurfaceKey(instrument.underlying)]).at(
-        instrument.expiry, instrument.strike, vol_time_measure(market.valuation_date)
-    )
-    return df_t_to_T * black_vec(states * carry, instrument.strike, vol, tau, instrument.option_type)
 
 
 def equity_exposure_profile(

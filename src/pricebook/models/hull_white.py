@@ -121,6 +121,22 @@ class HullWhite:
         rng = np.random.default_rng((numerics.seed, round(t * 1_000_000)))
         return rng.normal(mean, math.sqrt(var), numerics.paths)
 
+    def bond_vec(
+        self, t: float, maturity: float, states: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+        """`P(t,T; r)` over an ARRAY of short rates — the `ZeroBondStates` capability.
+
+        The same closed form `bond` evaluates for one rate: `log A` and `B` are curve-and-
+        parameter facts independent of `r`, so they are computed once per maturity and the path
+        dimension stays in numpy (§3d — one formula, two call shapes, exactly as `black_vec` is
+        to `black`).
+
+        **Moved here from `risk/exposure.py`**, which was building it out of `_log_a` — a private
+        of this class read from L5. Second instance of that reach in two slices (the first was
+        `sample_state`), and both were dragged out by declaring the capability rather than by a
+        dependency check: `acyclic` and `layers` see the module edge, not the privacy."""
+        return np.exp(self._log_a(t, maturity) - self.b(t, maturity) * states)
+
     # ── the closed forms ──────────────────────────────────────────────────────────────────
     @property
     def r0(self) -> float:
