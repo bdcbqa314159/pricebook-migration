@@ -70,11 +70,27 @@ class DividendYieldKey:
     underlying: EquityUnderlying
 
 
+@dataclass(frozen=True)
+class FundingSpreadKey:
+    """A key into `scalars` for an **unsecured funding spread** — FVA's weight.
+
+    Market state, not config: risk bumps it (through the one `ScalarBump` mechanism), so §3c step
+    2 puts it in the snapshot rather than on an XVA config object where it could not be bumped.
+
+    **Keyed by currency, and that is a deliberate narrowing.** Funding is properly a function of
+    the *funding set* (a CSA, a desk, a legal entity), but ng has no such identity yet and
+    inventing one for a single consumer is the speculative generality §6b forbids. **Widen when a
+    second funding set appears** — the key gains a field or a sibling then, and nothing else moves,
+    which is the point of keying rather than fielding."""
+
+    currency: Currency
+
+
 #: Every key type the `scalars` shape accepts. Named, because this union grows by one entry per
 #: asset class (keys, not fields — §3c) and a `Mapping` key is INVARIANT: without the alias every
 #: producer of a scalars dict has to restate the full union, and each new asset class breaks them
 #: all at once. Widen here; producers annotate with the alias.
-ScalarKeyType = ScalarKey | RecoveryKey | EquitySpotKey | DividendYieldKey
+ScalarKeyType = ScalarKey | RecoveryKey | EquitySpotKey | DividendYieldKey | FundingSpreadKey
 
 
 @dataclass(frozen=True)
