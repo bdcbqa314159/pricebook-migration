@@ -8,6 +8,7 @@ Subcommands (each a small function; `all` is the CI / merge gate):
     fields             FAIL if a products/foundation value dataclass has >5 fields w/o exemption
     layers             FAIL if L0 (foundation/) contains finance vocabulary (semantic layer gate)
     debt               FAIL if suppressions - OPEN.md ng-ledger entries != 0
+    slow               FAIL any test file over the per-file wall-clock ceiling (7c)
     provenance         FAIL if a landed module lacks its 4-line header
     version            FAIL if __version__ != top CHANGELOG.md entry
     all                everything above
@@ -29,6 +30,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -93,6 +95,41 @@ def acyclic() -> list[str]:
                             f"{parts[1]}(L{dep_layer}) — upward import"
                         )
     return errs
+
+
+#: Per-file wall-clock ceiling, seconds (CLAUDE.md 7c). Promoted from NG-WATCH-CLOCK on its
+#: second instance. A scalar closed form called inside a path loop is O(paths x steps) Python
+#: calls: it cost one file 73s (rates MC draft) and 59s (equity exposure draft), both under 1s
+#: once vectorised. Measured headroom at the time of landing: the slowest file was 0.99s, and
+#: most of that is interpreter startup -- so 10s is ~10x the slowest honest file and ~6x under
+#: the failures it exists to catch, which runner variance cannot bridge in either direction.
+SLOW_TEST_CEILING_S = 10.0
+#: An honestly-heavy file says so, in the file, with a reason -- never silently (the
+#: `fields-exempt` pattern). Exemptions are ledgered like any other suppression.
+SLOW_EXEMPT = "# slow-test-exempt:"
+
+
+def slow_tests() -> list[str]:
+    """FAIL any test file over `SLOW_TEST_CEILING_S`. The floor rule's TIME analogue: the other
+    faces bound what a check examined, this one bounds what it costs to examine it. Twice a
+    per-path Python loop made a file 60-70x its vectorised cost, and nothing failed -- the suite
+    was green and merely slow, which no gate could see."""
+    out: list[str] = []
+    for f in sorted(TESTS.rglob("test_*.py")):
+        if SLOW_EXEMPT in f.read_text(encoding="utf-8"):
+            continue
+        t0 = time.time()
+        subprocess.call(
+            [sys.executable, "-m", "pytest", str(f), "-q", "--no-header"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        elapsed = time.time() - t0
+        if elapsed > SLOW_TEST_CEILING_S:
+            out.append(
+                f"{f} took {elapsed:.1f}s > {SLOW_TEST_CEILING_S}s "
+                f"(vectorise it, or mark it `{SLOW_EXEMPT} <reason>` and ledger the exemption)"
+            )
+    return out
 
 
 def run_tests(max_layer: int | None) -> int:
@@ -361,6 +398,7 @@ def main() -> int:
     sub.add_parser("quarry")
     sub.add_parser("debt")
     sub.add_parser("provenance")
+    sub.add_parser("slow")
     sub.add_parser("version")
     sub.add_parser("all")
     args = ap.parse_args()
@@ -369,10 +407,13 @@ def main() -> int:
         return run_tests(args.layer)
     checks = {
         "acyclic": acyclic, "fields": fields, "layers": layers, "debt": debt, "quarry": quarry,
-        "provenance": provenance, "version": version,
+        "provenance": provenance, "version": version, "slow": slow_tests,
     }
     if args.cmd == "all":
-        return 0 if all(_report(n, f()) for n, f in checks.items()) else 1
+        # `slow` re-runs every file separately, so it is NOT in `all` — CI calls it once,
+        # explicitly, rather than making every local `all` pay for it.
+        quick = {n: f for n, f in checks.items() if n != "slow"}
+        return 0 if all(_report(n, f()) for n, f in quick.items()) else 1
     return 0 if _report(args.cmd, checks[args.cmd]()) else 1
 
 

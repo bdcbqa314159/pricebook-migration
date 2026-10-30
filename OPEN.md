@@ -47,7 +47,12 @@ so a `Priceable` cashflow capability now would be §6b-speculative for one not-y
 **Re-open trigger:** the first coupon-product theta, or the `roll_down` slice — whichever comes
 first builds the guard §1-clean, justified then by two consumers (the guard and `roll_down`).
 
-**NG-WATCH-CLOCK — test wall-clock is ungated.** `TEST_FLOOR` holds the test *count*; nothing holds
+**NG-WATCH-CLOCK — CLOSED 2026-10-30, promoted to a gate.** *(Was: test wall-clock is ungated.)*
+Second instance arrived (equity exposure, 59s — same cause as the rates draft's 73s: a scalar
+closed form inside a path loop), so the §6 convention fired and this became `verify.py slow`, the
+per-file 10s ceiling in CLAUDE.md §7c. Original entry kept below for the record.
+
+**NG-WATCH-CLOCK (original) — test wall-clock is ungated.** `TEST_FLOOR` holds the test *count*; nothing holds
 the *time*. The MC exposure profile's first draft ran 73s for one file (per-path `bond()` calls)
 before vectorisation took it to 0.45s — caught by eye, not by a gate. One instance, so §6's
 convention is **watch, not gate**: a wall-clock ceiling built on a single case would be a number
