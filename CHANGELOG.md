@@ -11,6 +11,68 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.143.0] - 2026-10-30
+
+### Added
+- **`docs/handoffs/CP_xva_reporting.md`** — the XVA / exposure-risk checkpoint (CVA → DVA → FVA →
+  BCVA → WWR), with the four review inputs. No build work: §6 holds the next slice until ruled.
+
+### Checkpoint findings worth carrying
+- **The family's defining property is that nothing in it is a special case.** One
+  `exposure_integral`, one `(date, EE)` profile shape, one `cva`. DVA is `cva` at different
+  arguments; BCVA is subtraction; WWR is the same profile conditionally computed; KVA's weight
+  shape already fits. **Three times this run a quantity that looked like new work was an existing
+  atom at different arguments**, and each time an exact equality test prevents it drifting into a
+  second definition.
+- **The `ρ→0` anchor is the best oracle this project has produced**, and the reason is
+  transferable: it is an *identity arranged in the code* (both samplers compose the same driver
+  mapping) rather than a tolerance between two estimators, with an AST guard keeping it that way.
+  That is the pattern to reach for whenever a new capability claims to generalise an old one.
+- **No rung-4 self-consistency oracle in this family either** — two consecutive runs now with
+  every anchor a closed form, an exact identity, or a structural invariant.
+- **The run's real finding was the 5.14% discounting bug, not WWR.** And the challenge-me answer
+  is that the cross-module clause is **not sufficient alone**: it says compare the modules, but not
+  *which* conventions exist. A **conventions register** (profiles are PV-dimensioned; vol is on the
+  ACT/365F clock; profiles exclude historical flows) would make them enumerable rather than
+  folkloric. Not proposed as law on one instance — recorded as the shape to reach for on a second.
+- **Three vector twins now** (`black_vec`, `bond_vec`, `norm_ppf_vec`), each bound to its scalar by
+  an exact elementwise test. Deliberately **not** generalised into a mechanism: they share a shape,
+  not code, and each is three lines. Trigger recorded — revisit when a twin needs more than `np`
+  substitution.
+- **`CorrelationKey` holds one pair, and the first multi-factor consumer owes a PSD check** — a
+  keyed set of correlations can be non-positive-semidefinite where a matrix cannot. Flagged now
+  rather than discovered later.
+
+### Fixed
+- **The debt count in the last two checkpoints was wrong, and this one says so.** `OPEN.md` carries
+  13 `**NG-` headers but only **6 live items**: four are closed or discharged and each keeps a
+  second header line for the record, so grepping headers double-counts the dead ones.
+  `CP_equity_process` reported 12 and the one before it 11 — both measuring lines, not items. The
+  `debt` gate never caught it because it asserts suppressions **equal** ledger entries and so never
+  cared about the absolute number. A small instance of this run's own lens: *a count nobody checks
+  is a check that cannot fail.*
+- **The checkpoint's cadence window, corrected against the ask.** Thread 0074 said six slices since
+  `CP_equity_process`; it is **three** (that checkpoint covered v0.129.0 → v0.138.0 and was written
+  in v0.139.0). The ≤6-slice cadence has **not** fired — the valid trigger is the
+  capability-cluster boundary. Recorded because a checkpoint that misstates its own window is the
+  wrong artifact to open an audit with.
+
+### Migration
+- **Drawdown 32 / 793 (4.0%) — and B7's cheap mass is spent, which is the input to the next-unit
+  decision.** Every remaining B7 tick needs a heavy new vertical: `risk/xva.py` (783L, 9 importers)
+  is gated on `kva` → a **capital/RWA** concept ng has none of *and* `repo_gap_risk` → the **repo**
+  family (~18 un-built modules); `models/gbm.py` is gated on `generate` → **joint paths** for
+  path-dependent payoffs.
+  The pattern has now held three times: (b)'s measurement harvest gave four ticks and stopped,
+  (c)'s asset class gave one, B7's family gave one. **Three consecutive runs ending at "the next
+  tick needs a heavy vertical" is evidence about scope**, and §4 is explicit that drawdown reports
+  and never steers — so it goes in front of Bernardo rather than being resolved inside a slice.
+- **The next unit is a milestone-grade fork, surfaced not chosen:** (i) a heavy B7 vertical
+  (capital/RWA or repo) retires the most lines; (ii) **path-dependent payoffs** unblocks the most —
+  Asian, Bermudan, callable and LSM all wait on path dependence, the largest un-built cluster;
+  (iii) **B8 portfolio/lifecycle** follows the ratified build order and is the only block never
+  opened. Reading offered as input; the choice is not drawdown's to make.
+
 ## [0.142.0] - 2026-10-30
 
 ### Added
