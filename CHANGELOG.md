@@ -11,6 +11,51 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.139.0] - 2026-10-30
+
+### Added
+- **`verify.py slow` — the per-file wall-clock ceiling (CI gate, CLAUDE.md §7c).** 10 s per test
+  file, promoted from `NG-WATCH-CLOCK` on its second instance. **The floor rule's time analogue:**
+  the other faces bound *what a check examined*; this one bounds *what it costs to examine it*.
+  A scalar closed form inside a path loop is `O(paths × steps)` Python calls, which twice took one
+  file to 59–73 s against a sub-second norm with **nothing failing** — the suite was green and
+  merely slow, which no other gate can see.
+  **Headroom measured, not assumed:** the slowest honest file is **0.99 s** (mostly interpreter
+  startup), so 10 s is ~10× the norm and ~6× under the failures. An honestly-heavy file carries
+  `# slow-test-exempt: <reason>` and is ledgered — never silent. **If the ceiling trips a file,
+  exempt that file; never raise the ceiling to hide it.** Deliberately **not** part of
+  `verify.py all` — it re-runs every file separately, so CI calls it once rather than making every
+  local `all` pay for it.
+- **`docs/handoffs/CP_equity_process.md`** — the equity + process-framework checkpoint (8 slices,
+  v0.129.0 → v0.138.0), with the four review inputs.
+
+### Changed
+- **`NG-WATCH-CLOCK` CLOSED** — promoted from a watch item to the gate above. The original entry
+  is kept in `OPEN.md` for the record rather than deleted.
+
+### Checkpoint findings worth carrying
+- **The run did its technical job and did not move the bar.** Equity opened end-to-end and
+  `StateProcess` landed with both consumers at birth, but drawdown moved **once in eight slices**
+  (30 → 31) and the designated bar-mover (c3) did not tick. **Three consecutive tick projections
+  were overturned**, each by the same discovery: the consumed surface was wider than a name-level
+  reading showed.
+- **No rung-4 self-consistency oracle was used anywhere in the run.** Every slice anchored on a
+  closed form, and c1 was sequenced first specifically to be that anchor for c2 and c3.
+- **Three checks in this run could not have failed, all mine:** 27 identical `PricingFailure`s; 40
+  identical zero exposures; and a flat-curve fixture on which a clock-advance and an expiry bump
+  agree *exactly*, so the test meant to separate them passed whichever had been implemented. The
+  first two produced the variance-floor clause; the third is the structural-oracle rule applied to
+  a test's **power**. Common thread: **green never reveals a powerless check.**
+- **The run's two §4 clauses matter more than its ticks.** "A consumed aggregate consumes its
+  members" caught **Cowork's own stale 0042 finding** one slice after landing. Both clauses, and
+  the clock gate, guard the same defect class — *a check that cannot fail* — which is now
+  measurably this project's most common defect, more common than wrong numbers.
+- **Correction accepted from Cowork and verified:** joint paths are **not** a tick-blocker for
+  `mc_exposure.py`. `pfe_95`/`pfe_99` are per-date percentiles and ENE/peak/effective-EPE/DVA/FVA
+  are marginal functionals; the `(n_paths, n_steps+1)` matrix is `compute`'s internal mechanism,
+  not its consumed surface. So **XVA-reporting on marginals alone retires the module** — the
+  single remaining blocker, and buildable now.
+
 ## [0.138.0] - 2026-10-29
 
 ### Added
