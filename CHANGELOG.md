@@ -11,6 +11,37 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.144.0] - 2026-10-30
+
+### Added
+- **`docs/conventions_register.md`** — a living doc (ruling `rulings_CP_xva_reporting.md` §2), not
+  law. CLAUDE.md §4's cross-module-convention clause says a shared convention needs a cross-module
+  oracle but not **which conventions exist**; that gap is what let the 5.14% discounting bug run
+  for two slices while every per-module oracle passed. This enumerates what the clause checks
+  against. **No build work** — all slices held under §6 pending Bernardo's scope ruling.
+- Indexed in `docs/README.md` beside the drawdown tracker, as the second living doc.
+
+### The register's immediate finding — 3 of 6 conventions are NOT cross-module guarded
+Each seeded convention was checked against the tree rather than assumed, and the Guard column
+distinguishes **guarded** (a test compares the modules) from **per-module** (each module tested,
+nothing asserts they agree — the exact standing the discounting convention had the day before it
+broke) from **owed**.
+- **guarded:** profiles are PV-dimensioned · the equity forward `F = S·e^{(r−q)T}` · `cva` weights
+  by `ΔQ` and `fva` by `funding_spread·Δt`.
+- **OWED — and it is the one to worry about:** *option vol lives on one clock* (`vol_time_measure`,
+  ACT/365F). It spans **ten modules**, the widest of any convention in the tree, and is "guarded"
+  only by fixtures happening to use the right function. That is the same standing as the convention
+  that already broke.
+- **per-module:** historical flows excluded from PV (invariant 6 — the swap path is guarded
+  thoroughly, the other engines are not compared to it) · `r` never taken as a separate input
+  (every module composes `df`, but nothing asserts the absence of an `r` parameter, and only a
+  non-flat curve would expose a divergence).
+
+**No gate proposed.** The ruling made this a doc and the clause promotes to law on a second
+convention bug, so the honest action is to record the exposure rather than pre-emptively build
+three gates. If the vol clock is what breaks next, this file is why it gets found in one slice
+instead of two.
+
 ## [0.143.0] - 2026-10-30
 
 ### Added
