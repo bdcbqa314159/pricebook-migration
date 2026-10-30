@@ -11,6 +11,68 @@ in progress; `1.0.0` is reached exactly when the quarry (`python/pricebook/`) is
 
 ## [Unreleased]
 
+## [0.140.0] - 2026-10-30
+
+### Added
+- **`XvaReport` + `xva_report` (L5)** — every exposure functional from **one** set of marginal
+  samples: EPE, **ENE**, **PFE percentiles**, **peak EE**, **effective EPE** (Basel's
+  non-decreasing running maximum, time-averaged), CVA, **DVA** and **FVA**. Taking the samples
+  rather than a summary is what lets one simulation answer all eight instead of one run per
+  quantity. `fields-exempt` per §3b — eight independent results a desk reads side by side, with
+  no sub-grouping that is itself a concept.
+- **`XvaTerms`** — the counterparty/funding terms as a value object (§3b: `xva_report` would
+  otherwise take seven arguments). `own_survival=None` expresses a **unilateral** report in the
+  type, since that is a real convention rather than a missing input.
+- **`risk/mtm.py`** — the MtM-on-sampled-states concern, **split out of `exposure.py` at the
+  ceiling that file set for itself** (the checkpoint named the next exposure builder as the
+  moment). The seam is by concern, not asset class: *valuing an instrument on sampled states*
+  here, *aggregating those values* there. `exposure.py` 416 → 334 lines.
+- **`ZeroBondStates`** — the capability a rates exposure needs on top of sampling, extending
+  `StateProcess`. Separate from the base because an equity spot process has no bond.
+- **`HullWhite.bond_vec`** — the vectorised bond **moved onto the dynamics that owns it**.
+
+### Changed
+- **DVA is not a new formula.** `DVA = LGD_own·Σ ENE·ΔQ_own` is `cva` evaluated on the ENE
+  profile with the own-survival curve, so the report calls the existing atom with different
+  arguments (§3d). A test asserts the **exact** equality, so a second definition cannot grow.
+  Same shape as equity rho coming free from `ir_delta` last run.
+- **ng's CVA/DVA supersede the quarry's rather than matching them.** The quarry approximates all
+  three adjustments as `spread × Δt`; ng integrates the **survival increment** `ΔQ`, which is
+  what makes the `hazard → 0` limit actually vanish. Recorded as a deliberate numerical
+  improvement, not parity. FVA keeps the spread form, because funding is a spread over *time*,
+  not a loss conditional on default.
+
+### Oracles
+- **`EPE(tᵢ) − ENE(tᵢ) = V₀/df(0,tᵢ)` — an identity, not a tolerance.** `max(V,0) − max(−V,0) ≡ V`,
+  and the discounted value is a martingale; so **both halves** of the report are tied to a closed
+  form in one statement. Non-vacuous because a **forward's** ENE is genuinely non-zero.
+- **A long option's ENE is exactly 0** — the discriminating companion: a report that confused the
+  two signs would pass the forward test on symmetry and fail here.
+- `DVA == cva(ene, own_survival, own_recovery)` exactly; both adjustments vanish at zero hazard;
+  PFE ordered; `ee_peak == max EPE` and `mean(EPE) ≤ effective_epe ≤ ee_peak`; FVA linear in the
+  spread; **the report's EPE is byte-identical to `equity_exposure_profile`** (or ng would hold
+  two definitions of expected positive exposure); `mtm_samples` serves **rates as well as equity**
+  through the one dispatch table.
+
+### Fixed
+- **A concrete-model `isinstance` inside risk, caught by the §1 AST gate** — the swap's MtM arm
+  first read `assert isinstance(model, HullWhite)`. Replaced by declaring `ZeroBondStates`, which
+  also removed **the second L5-reaches-into-HW-privates case in two slices**: `_bond_vec` was
+  built in `risk/` out of `model._log_a`. Both were dragged out by declaring a capability, not by
+  a dependency check — `acyclic` and `layers` see the module edge, not the privacy.
+
+### Migration
+- **Drawdown 31 → 32 / 793 — `models/mc_exposure.py` ticked.** All **ten** names in the consumed
+  `to_dict` surface are superseded (the §4 aggregate clause makes all ten consumed, since the one
+  importer passes the whole bundle onward). `shed:` the `revalue(paths, step)` callback shape and
+  the engine-internal CVA/DVA/FVA bundling, both **by design**; `ExposureResult` `dead` as a name,
+  superseded as a capability.
+- **The unblocking correction was Cowork's, and verifying it mattered:** my c3 write-up recorded
+  joint paths as a second blocker. It is not one — every consumed functional is marginal, and the
+  path matrix is `compute`'s internal mechanism. Checking that before building is what let this
+  slice proceed at all.
+- `TEST_FLOOR` 568 → 577.
+
 ## [0.139.0] - 2026-10-30
 
 ### Added

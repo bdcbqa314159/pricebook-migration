@@ -19,7 +19,7 @@ the drawdown denominator** (CLAUDE.md §4/§6 point here, not to a hardcoded lit
 `python/pricebook/` (**780**) + files already parked under `parked/` (**13**) = **793**, `__init__.py`
 markers included. Verified 2026-08-01 by direct count.
 
-**Deletable (the §4 drawdown bar): 31 / 793** — **all 31 are TICKED; none is physically moved**
+**Deletable (the §4 drawdown bar): 32 / 793** — **all 32 are TICKED; none is physically moved**
 (park-model amendment, 2026-10-26: a park is a tracker/MANIFEST state, not a `git mv` — CLAUDE.md §4,
 doc 13 §7, ruling `rulings_quarry_park_model.md`). The 19 formerly physically parked at the Topic-0
 (v0.74.0) and Topic-1 (v0.98.0) closes have been **restored to their original quarry paths**: those
@@ -711,6 +711,34 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   **XVA-reporting** slice, newly named below, for (2).
   Evidence: `spec_c3_equity_mc_exposure.md` + `tests/L5/test_equity_mc_exposure.py` + `CHANGELOG`
   v0.138.0.
+
+- **XVA-reporting retire read (+1 TICK — `models/mc_exposure.py` DELETABLE, 31 → 32 / 793;
+  Cowork-ruled scope, thread 0068).** The module c3 could not tick now ticks, and the correction
+  that unblocked it was **Cowork's**: every functional the consumer reads is **marginal**
+  (`np.percentile` runs on the per-date array; ENE/peak/effective-EPE/DVA/FVA are all marginal),
+  so the `(n_paths, n_steps+1)` matrix is `compute`'s **internal mechanism**, not its consumed
+  surface. My c3 write-up recorded joint paths as a second blocker; that was wrong, and verifying
+  it before building is what let this slice proceed.
+  **Consumed surface, name by name** — one importer (`models/mc_instrument_adapters.py`) calling
+  `ExposureEngine(...).compute().to_dict()`, so the §4 aggregate clause makes **all ten** fields
+  consumed, and **all ten are superseded**: `times` → every ng profile is `(date, value)` ·
+  `epe` → `XvaReport.epe` (asserted **byte-identical** to `equity_exposure_profile`) · `ene` ·
+  `pfe_95`/`pfe_99` → `XvaReport.pfe[q]` · `ee_peak` · `effective_epe` (Basel running-max,
+  time-averaged) · `cva` → the **unchanged** atom · `dva` → the **same** atom on the ENE profile
+  with the own curve · `fva`.
+  `shed:`
+  - **`revalue(paths, step)` — the callback shape** → shed by design. ng's `mtm_samples` returns
+    per-date sample arrays instead of handing out a joint matrix to index; the capability (value
+    this instrument on simulated states) is superseded, the *mechanism* is not carried.
+  - **engine-internal CVA/DVA/FVA bundling** → shed by design: ng splits profile from atom, which
+    is the standing XVA acceptance criterion.
+  - **the `spread × Δt` approximation** for CVA/DVA → **superseded by something better**, not
+    shed: ng integrates the **survival increment** `ΔQ`, which is what makes the `hazard → 0`
+    limit vanish. Recorded as a deliberate numerical improvement over the quarry, not parity.
+  - **`ExposureResult` as a type** → `dead` as a *name* (nothing imports it; its fields are read
+    through `to_dict`), superseded as a *capability* by `XvaReport`.
+  **Residual empty.** Evidence: `spec_c3_equity_mc_exposure.md` §3 + `rulings_CP_equity_process.md`
+  + `tests/L5/test_xva_report.py` + `CHANGELOG` v0.140.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -775,14 +803,9 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `models/regime_pricing` (`equity_delta`, `equity_gamma`, `equity_vega`). Note ng takes greeks
     by **bump** (`central_diff`), not by closed form, so the quarry's analytic `equity_delta`
     formulas are content to mine, not a shape to copy (§4 mine-for-CONTENT-never-STRUCTURE).
-  - **the XVA-REPORTING slice** (a NEW destination row, created by the c3 retire-read, v0.138.0) —
-    **on crossing:** build the exposure *report* surface ng lacks — **ENE**, **PFE percentiles**
-    (95/99), **peak EE**, **effective EPE**, and **DVA/FVA** — which `models/mc_exposure.py`'s one
-    importer consumes wholesale via `ExposureResult.to_dict()`. Note the percentiles and ENE need
-    only the **marginals** ng already samples, so they do not wait on the joint-path widening; the
-    `to_dict` contract does mean the whole set must land together before that module ticks. ng
-    splits profile from atom deliberately, so the quarry's engine-internal CVA/DVA/FVA bundling is
-    shed — the *quantities* are the residual, not the shape.
+  - ~~**the XVA-REPORTING slice**~~ — **DONE, v0.140.0.** `XvaReport` landed on the marginals and
+    `models/mc_exposure.py` ticked (31 → 32). Kept struck through rather than deleted: the row is
+    the record that the obligation was written down and then discharged.
   - **the ROLL-DOWN slice (the coupon case only — the clock bump itself LANDED in v0.136.0)** —
     **on crossing:** extend `TimeBump` to a window containing a cashflow, where invariant 6
     re-partitions the flow from future to historical. That difference is **roll-down P&L, not
