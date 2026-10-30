@@ -766,6 +766,32 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
   capability when the consumer crosses?* — here, no). `deferred→` the **KVA/capital** row and the
   **repo** vertical. `xva.py` ticks when KVA lands and repo crosses, not before.
   Evidence: `spec_fva_bcva_slice.md` + `tests/L5/test_fva_bcva.py` + `CHANGELOG` v0.141.0.
+
+- **WWR / joint-paths retire read (0 TICKS — 32 / 793 unchanged; and the `gbm.py` forward-link was
+  MIS-TARGETED, which is the useful finding):** `quarry/pricebook/models/gbm.py` (126L, 4 live
+  importers, consumed surface `GBMGenerator`).
+  `gbm.py` has carried `deferred→` **the WWR / joint-path slice** since c2 — on the reasoning that
+  `GBMGenerator` is the stepped joint-path generator and WWR is what needs joint paths. **WWR did
+  not need joint paths.** Conditioning analytically on the default interval (a truncated-normal
+  draw of the default driver, by inverse-CDF) gives the conditional exposure **exactly**, with no
+  path grid and no filtering — which is *better* than joint paths here, because filtering paths
+  into interval buckets would make each interval a subsample and the ρ=0 case would then agree
+  with the marginal only statistically instead of exactly.
+  **So the surface splits, and only half of it crosses:**
+  - **`terminal(T, n_paths, …)` → SUPERSEDED** by `BlackScholesProcess.sample_state(T, …)`: the
+    terminal distribution is precisely what ng's exact marginal sampler draws. One importer
+    (`models/mc_pricer.py`).
+  - **`generate(T, n_steps, n_paths, …)` → RESIDENT.** A path matrix over a time grid, consumed by
+    `models/lsm.py` (Longstaff-Schwartz), `options/asian.py` and `options/asian_option.py` — all
+    three genuinely **path-dependent payoffs**, which need the whole trajectory and not a marginal.
+  - `rng=QuasiRandom` (Sobol) and `antithetic` → variance reduction ng has none of; `dead` as
+    consumed names (no importer passes them) but named here because they travel with `generate`.
+  **The forward-link is CORRECTED: `gbm.py` is `deferred→` the PATH-DEPENDENT-PAYOFF slice**
+  (Asian / Bermudan-LSM), not WWR. Its real consumer was never the credit correlation; it was the
+  Asian and American payoffs, which is a different vertical. Recorded so the row is not read again
+  as "waiting on WWR", which is now done.
+  **No tick:** three of the four importers want `generate`. Evidence: `spec_wwr_jointpaths.md` +
+  `tests/L5/test_wrong_way_risk.py` + `CHANGELOG` v0.142.0.
   `risk/xva.py` residual unchanged at 12 of 13 functions.
   Evidence: `spec_mc_slice2_netting.md` + `CHANGELOG` v0.127.0.
 
@@ -830,6 +856,13 @@ physical `git mv` batches at the next topic close, doc 18 §9). The 6 Topic-1 mo
     `models/regime_pricing` (`equity_delta`, `equity_gamma`, `equity_vega`). Note ng takes greeks
     by **bump** (`central_diff`), not by closed form, so the quarry's analytic `equity_delta`
     formulas are content to mine, not a shape to copy (§4 mine-for-CONTENT-never-STRUCTURE).
+  - **the PATH-DEPENDENT-PAYOFF slice (Asian / Bermudan-LSM)** — **on crossing:** build joint
+    paths over a time grid (`StateProcess` widened from marginal sampling to trajectories) and
+    `gbm.py` retires with it: `generate` is consumed by `models/lsm.py`, `options/asian.py` and
+    `options/asian_option.py`, all of which need the whole path. **This row replaces `gbm.py`'s
+    former `deferred→WWR` link, which was mis-targeted** — WWR turned out not to need joint paths
+    (it conditions analytically on the default interval, v0.142.0). Sobol/antithetic variance
+    reduction travels with it.
   - **the KVA / capital slice** (a NEW destination row, created by the FVA/BCVA retire-read,
     v0.141.0) — **on crossing:** build a **capital/RWA profile** and `kva = Σ K(tᵢ)·hurdle·Δtᵢ·df`
     on the shared `exposure_integral` (the weight is `hurdle·Δt`, the same shape as FVA's — the

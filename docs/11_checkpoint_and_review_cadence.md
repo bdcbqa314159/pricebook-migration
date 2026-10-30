@@ -144,3 +144,41 @@ reading a checkpoint report, which is exactly the kind of catch a gate should be
 
 Promotion to CLAUDE.md §6 on a second instance (the floor rule's own precedent: audit #10 stood alone
 until `--layer 0` and `provenance` made it three).
+
+## Oracle-quality audit — the powerless-check lens (2026-10-30 — rulings: `handoffs/rulings_CP_equity_process.md`, thread 0072)
+
+**The audit's FIRST question is now:** *for each oracle and each gate — what makes it red, and can
+that actually happen?* "A check that cannot fail" is this project's named defect class, and by the
+equity/process checkpoint it was measurably **more common than wrong numbers**. Green never reveals
+a powerless check, so power is **asserted, not observed**.
+
+The five structural rules all guard this one class, and each came from an instance of it:
+
+| rule | the powerlessness it guards |
+|---|---|
+| structural-oracle (§6) | a self-consistency oracle that reprices what it just built |
+| floor-on-population (§6) | a check that examined an empty or truncated set |
+| resolve-don't-just-exist (§6) | a presence check that never dereferenced what it named |
+| **floor-on-variance** (§4) | a *populated* baseline with no discriminating power (all-equal, all-zero, all-`PricingFailure`) |
+| **aggregate-consumes-members** (§4) | a consumed-surface read that stopped at the bound name |
+
+**The cross-module case (ruled 2026-10-30, thread 0072).** *A convention shared across modules
+needs a cross-module oracle.* §3d guarantees a shared **atom** structurally — by composition, so it
+cannot be violated — but a shared **convention** has no structural guarantee at all. A per-module
+oracle that is internally self-consistent is therefore **blind** to a convention mismatch, and every
+module can be individually correct while the system is wrong. So at least one oracle must **compare
+the modules**.
+
+*Precedent:* exposure profiles must be discounted to today, because `cva` weights by `ΔQ` and
+discounts nothing. Three builders did; the equity one did not. **Equity CVA was 5.14% too large for
+two slices**, and every oracle passed — the martingale oracle asserted `EE = V₀/df`, which is
+precisely what an undiscounted profile gives, so it validated the builder against itself. Nothing
+compared the builders to each other. The guard is now
+`test_every_exposure_profile_is_PV_DIMENSIONED_the_convention_cva_requires`, with the rates builder
+as the control that was always right. Promote to §4 law on a second instance.
+
+**A third shape, recorded for the pattern rather than ruled:** a test can be powerless because its
+*fixture* cannot discriminate, even with correct data and a reachable red. On a **flat** curve a
+clock-advance and an expiry bump agree to the last bit (`df(T)/df(Δ) = e^{−r(T−Δ)} = df(T−Δ)`), so
+the test separating them passed whichever construction had been implemented. Fixed by sloping the
+curve; the degeneracy is asserted alongside so the reason cannot rot.
