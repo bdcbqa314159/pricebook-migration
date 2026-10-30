@@ -62,6 +62,25 @@ class StateProcess(Protocol):
 
     def sample_state(self, t: float, numerics: MonteCarloConfig) -> NDArray[np.float64]: ...
 
+    def normal_draws(self, t: float, numerics: MonteCarloConfig) -> NDArray[np.float64]:
+        """The idiosyncratic standard-normal draws this dynamics would use at `t`.
+
+        On the protocol rather than reached with `getattr`, the same rule the rest of the tree
+        follows: a correlated sampler needs the *identical* stream as its own `W` for the ρ→0 case
+        to be an identity, and that is a capability, not an implementation detail to probe."""
+        ...
+
+    def state_from_normal(self, t: float, z: NDArray[np.float64]) -> NDArray[np.float64]:
+        """The state at `t` implied by standard-normal draws `z` — the dynamics' transition as a
+        **pure function of its driver**, with no randomness of its own.
+
+        This is the factoring wrong-way risk needs, and it is why ρ=0 is an *identity* rather than
+        a coincidence: `sample_state` draws `z` and calls this, and the correlated sampler builds
+        `z = ρ·Z_default + √(1−ρ²)·W` and calls the **same** method. One mapping, two ways of
+        producing its argument (§3d) — if there were two mappings, agreement at ρ=0 would be two
+        formulas happening to match."""
+        ...
+
 
 @runtime_checkable
 class ZeroBondStates(StateProcess, Protocol):
@@ -115,8 +134,31 @@ class BlackScholesProcess:
         )
         if vol <= 0.0:
             return np.full(numerics.paths, spot * math.exp(drift_total))
-        rng = np.random.default_rng((numerics.seed, round(t * 1_000_000)))
-        z = rng.standard_normal(numerics.paths)
+        return self.state_from_normal(t, self.normal_draws(t, numerics))
+
+    def normal_draws(self, t: float, numerics: MonteCarloConfig) -> NDArray[np.float64]:
+        """The idiosyncratic standard-normal draws for date `t` — seeded per date, so a profile
+        is reproducible byte-identically (invariant 1) while dates do not share draws.
+
+        Exposed so the **correlated** sampler can reuse the identical stream as its `W`: at ρ=0
+        `z = W`, and reusing the stream is what makes the ρ→0 agreement exact instead of merely
+        statistical."""
+        return np.random.default_rng((numerics.seed, round(t * 1_000_000))).standard_normal(
+            numerics.paths
+        )
+
+    def state_from_normal(self, t: float, z: NDArray[np.float64]) -> NDArray[np.float64]:
+        """`S_t = S₀·exp((r−q−½σ²)t + σ√t·z)` — exact, and a pure function of `z`."""
+        spot = self.market.scalars[EquitySpotKey(self.underlying)]
+        q = self.market.scalars[DividendYieldKey(self.underlying)]
+        drift_total = self._growth(t) - q * t
+        if t <= 0.0:
+            return np.full(np.shape(z), spot)
+        vol = flat_surface(self.market.surfaces[EquitySurfaceKey(self.underlying)]).at(
+            self._date(t), spot, vol_time_measure(self.market.valuation_date)
+        )
+        if vol <= 0.0:
+            return np.full(np.shape(z), spot * math.exp(drift_total))
         return spot * np.exp(drift_total - 0.5 * vol * vol * t + vol * math.sqrt(t) * z)
 
     def _growth(self, t: float) -> float:

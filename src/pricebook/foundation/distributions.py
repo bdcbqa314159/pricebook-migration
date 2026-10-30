@@ -31,3 +31,15 @@ def norm_ppf(p: float) -> float:
     if not 0.0 < p < 1.0:
         raise ValueError(f"norm_ppf requires 0 < p < 1, got {p}")
     return float(norm.ppf(p))
+
+
+def norm_ppf_vec(x):
+    """`norm_ppf` over an ARRAY — the inverse CDF at a vector of probabilities.
+
+    The same scipy call at a different shape, and it exists for the same reason `black_vec` and
+    `bond_vec` do: calling the scalar version inside a path loop is `O(paths)` Python calls, which
+    has now cost this project three slices (73s rates MC, 59s equity exposure, and the WWR
+    copula's 400k-path inverse-CDF, which did not finish inside a 120s test timeout). Bound to the
+    scalar by a tested elementwise identity, so two shapes cannot become two functions (§3d).
+    """
+    return norm.ppf(x)
