@@ -433,15 +433,18 @@ class Calendar(_BusinessDayArithmetic):
         return {"calendar": self.identity}
 
     def _holidays(self, year: int) -> frozenset[date]:
-        return _holidays_of(
-            self, year
-        )  # module-level cache (Calendar is frozen/hashable)
+        # The rule set is passed IN rather than reached for inside the helper: a module-level
+        # function reading `cal._rule_set` is a private access across the class boundary, which
+        # `SLF001` flags and which reads the same as the genuine breaches that gate exists for
+        # (an L5 module building a sampler out of an L3 model's privates, twice). Narrowing it
+        # here costs one argument and leaves the gate with nothing to suppress.
+        return _holidays_of(self, self._rule_set, year)  # module-level cache (frozen/hashable)
 
 
 @lru_cache(maxsize=None)
-def _holidays_of(cal: Calendar, year: int) -> frozenset[date]:
+def _holidays_of(cal: Calendar, rules: HolidaySet, year: int) -> frozenset[date]:
     raw: set[date] = set()
-    for rule in cal._rule_set.holidays:
+    for rule in rules.holidays:
         raw.update(rule(cal, year))
     if cal.observance is Observance.FURIKAE:
         raw |= _furikae_substitutes(raw)

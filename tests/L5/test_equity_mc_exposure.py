@@ -18,6 +18,8 @@ MtM goes negative, so the floor bites and its own closed form catches that.
 import math
 from datetime import date, timedelta
 
+import numpy as np
+
 import pytest
 
 from pricebook.foundation import Currency, PricingResult
@@ -71,35 +73,39 @@ def _c1_price(option: EquityOption, market: MarketSnapshot) -> float:
 
 
 # ── 1. the closed-form anchor ───────────────────────────────────────────────────────────────
-def test_equity_EE_matches_the_MARTINGALE_closed_form() -> None:
-    """`EE(tᵢ) = V₀/df(0,tᵢ)`. Independent of the exposure code: the right-hand side is c1's
-    price and a discount factor."""
+def test_equity_EE_is_CONSTANT_at_V0_the_martingale_closed_form() -> None:
+    """**`EE(tᵢ) = V₀` at every date, flat.** Profiles are discounted to today, and a long
+    option's discounted value is a martingale, so the discounted expected exposure is the
+    option's own price — the same number at every horizon.
+
+    This is strictly sharper than the undiscounted form (`V₀/df`) the slice first asserted: a
+    *constant* is a stronger claim than a curve, and it fails if the discounting is dropped,
+    doubled, or applied at the wrong date. The undiscounted version passed while the profile was
+    5.14% too large for `cva`, because it checked the builder against itself rather than against
+    the convention `cva` requires."""
     market = _market()
     for strike in (80.0, 100.0, 130.0):
         option = _option(strike)
         v0 = _c1_price(option, market)
-        curve = market.curves.discount(Currency.USD, None)
         profile = equity_exposure_profile(option, _process(market), DATES, MC)
         assert isinstance(profile, tuple) and len(profile) == len(DATES), profile
         for (d, ee), expected_date in zip(profile, DATES):
             assert d == expected_date
-            want = v0 / curve.df(d)
-            assert ee == pytest.approx(want, rel=0.02), (strike, d, ee, want)
+            assert ee == pytest.approx(v0, rel=0.02), (strike, d, ee, v0)
 
 
-def test_the_exposure_profile_RISES_then_the_option_decays() -> None:
-    """A long option's EE grows with the gross-up `1/df` — strictly increasing in `tᵢ` because the
-    option value at a *fixed* expiry is a martingale under the forward measure, so only the
-    discount gross-up moves it. Any time-decay in the profile would mean the builder is repricing
-    at the wrong expiry."""
-    profile = equity_exposure_profile(_option(), _process(), DATES, MC)
-    ees = [ee for _, ee in profile]
-    assert ees == sorted(ees), ees
+def test_the_profile_is_FLAT_not_trending_which_a_wrong_discounting_would_break() -> None:
+    """The shape claim behind the constant above: no trend either way. A missing discount makes it
+    rise like `1/df`; discounting twice makes it fall like `df`. Asserting flatness catches both
+    directions, which `sorted(ees)` (the original test) only caught one of — and it passed on the
+    undiscounted profile."""
+    ees = [ee for _, ee in equity_exposure_profile(_option(), _process(), DATES, MC)]
+    assert max(ees) / min(ees) < 1.02, ees
 
 
 def test_convergence_the_error_falls_like_one_over_sqrt_P() -> None:
     market = _market()
-    want = _c1_price(_option(), market) / market.curves.discount(Currency.USD, None).df(DATES[1])
+    want = _c1_price(_option(), market)  # discounted EE of a long option IS its price
     errs = []
     for paths in (2_000, 8_000, 32_000, 128_000):
         prof = equity_exposure_profile(
@@ -133,7 +139,11 @@ def test_a_FORWARD_exposure_exercises_the_positive_part_an_option_cannot() -> No
         t = tm.year_fraction(d)
         carry = math.exp((R - Q) * (big_t - t))
         df_t_to_T = curve.df(EXPIRY) / curve.df(d)
-        want = df_t_to_T * carry * black(S0 * math.exp((R - Q) * t), k / carry, VOL, t, OptionType.CALL)
+        want = (
+            curve.df(d)  # the profile is discounted to today
+            * df_t_to_T * carry
+            * black(S0 * math.exp((R - Q) * t), k / carry, VOL, t, OptionType.CALL)
+        )
         assert ee == pytest.approx(want, rel=0.03), (d, ee, want)
         assert ee > 0.0
 
@@ -190,3 +200,55 @@ def test_black_vec_IS_black_elementwise() -> None:
                     got = black_vec(forwards, strike, vol, t, kind)
                     want = [black(float(f), strike, vol, t, kind) for f in forwards]
                     assert np.allclose(got, want, rtol=0.0, atol=0.0), (strike, vol, t, kind)
+
+
+def test_every_exposure_profile_is_PV_DIMENSIONED_the_convention_cva_requires() -> None:
+    """**The gate that was missing when the discounting bug shipped.**
+
+    `cva` weights by the survival increment and discounts **nothing**, so every profile that feeds
+    it must already be discounted to today. Three builders did (the rates MC multiplies by
+    `model.bond(0,tᵢ,r₀)`; the two analytic ones return a `PricingResult` PV) and the equity one
+    did not — so equity CVA was 5.14% too large, while every individual oracle passed, because
+    each checked a builder against itself and none compared the builders to one another.
+
+    The check: a profile value must be a **present value**, i.e. bounded by the undiscounted
+    expectation and strictly below it whenever rates are positive and the date is in the future.
+    Run across both MC builders, with the rates one as the control that was always right."""
+    import importlib.util
+    import sys
+
+    from pricebook.foundation.numerics import MonteCarloConfig
+    from pricebook.risk.exposure import mc_exposure_profile
+    from pricebook.risk.mtm import mtm_samples
+
+    market = _market()
+    cfg = MonteCarloConfig(paths=20_000, seed=31)
+
+    # equity: the profile must sit BELOW the raw expectation by exactly the discount factor
+    option = _option()
+    curve = market.curves.discount(Currency.USD, None)
+    profile = equity_exposure_profile(option, _process(market), DATES, cfg)
+    samples = mtm_samples(option, _process(market), DATES, cfg)
+    for (d, ee), (d2, raw) in zip(profile, samples):
+        assert d == d2
+        undiscounted = float(np.maximum(raw, 0.0).mean())
+        assert ee == pytest.approx(curve.df(d) * undiscounted, rel=1e-12), d
+        assert ee < undiscounted, d  # positive rates, future date ⇒ strictly discounted
+
+    # rates: the control — this builder discounted from the start, and still does
+    sys.path.insert(0, ".")
+    spec = importlib.util.spec_from_file_location("mce", "tests/L5/test_mc_exposure.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    hw = mod._hw()
+    rates_profile = mc_exposure_profile(mod._swap(0.020, 1_000_000.0), hw, cfg)
+    disc = hw.market.curves.discount(hw.currency)
+    # the rates control, asserted against its own samples the same way (not a tautology — the
+    # first draft wrote `ee < ee/df`, which is true for any positive ee and tests nothing)
+    swap = mod._swap(0.020, 1_000_000.0)
+    for d, ee in rates_profile:
+        if ee <= 0.0:
+            continue
+        raw = mtm_samples(swap, hw, (d,), cfg)[0][1]
+        undiscounted = abs(swap.notional) * float(np.maximum(raw / swap.notional, 0.0).mean())
+        assert ee == pytest.approx(disc.df(d) * undiscounted, rel=5e-2), (d, ee, undiscounted)

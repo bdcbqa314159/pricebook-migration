@@ -297,14 +297,23 @@ def equity_exposure_profile(
 ) -> ExposureProfile | PricingFailure:
     """`EE(tᵢ) = E[max(MtM(tᵢ), 0)]` for an equity derivative, by Monte-Carlo over `process`.
 
-    **Undiscounted, like every other profile here** — `cva` applies the survival weighting and the
-    discounting, which is why that atom is untouched by a third asset class arriving.
+    **DISCOUNTED to today, like every other profile here** — `EE(tᵢ) = df(0,tᵢ)·E[max(V(tᵢ), 0)]`.
+    `cva` weights by the survival increment and does **not** discount, so the discounting has to
+    live in the profile; the three other builders already did it (the rates MC multiplies by
+    `model.bond(0,tᵢ,r₀)`, and the two analytic builders return a `PricingResult` PV).
+
+    *This was wrong when the slice landed* — v0.138.0 returned the raw expectation and claimed in
+    this docstring that `cva` discounted, which it never has. Equity CVA was overstated by 5.14%.
+    The convention is now asserted across all four builders (`test_every_exposure_profile_is_PV`),
+    because every oracle involved was internally consistent and nothing compared the builders to
+    each other.
 
     The exposure is anchored, not merely simulated: for a long option the future MtM is always
     positive and its discounted value is a martingale, so `EE(tᵢ) = V₀/df(0,tᵢ)` **exactly** — c1's
     price grossed up. That is the oracle, and it is independent of this function."""
     market = process.market
     tm = vol_time_measure(market.valuation_date)
+    curve = market.curves.discount(instrument.currency, None)
     out: list[tuple[date, float]] = []
     try:
         for d in dates:
@@ -313,7 +322,8 @@ def equity_exposure_profile(
                 process, t, numerics,
                 lambda states, _t=t: np.maximum(_residual_value(instrument, states, _t, process), 0.0),
             )
-            out.append((d, est.mean))
+            # discount to today HERE: `cva` applies the survival increment and nothing else
+            out.append((d, curve.df(d) * est.mean))
     except (ValueError, KeyError, ZeroDivisionError) as exc:
         return PricingFailure(f"equity MC exposure: {exc}")
     return tuple(out)
